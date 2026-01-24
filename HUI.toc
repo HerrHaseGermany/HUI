@@ -1,0 +1,15 @@
+## Interface: 11508
+## Title: HUI
+## Notes: Hase UI - lightweight Classic Hardcore UI
+## Author: Hase
+## Version: 0.1.0
+## SavedVariables: HUIDB
+
+src\util.lua
+src\core.lua
+src\unitframes.lua
+src\actionbars.lua
+src\minimap.lua
+src\chat.lua
+src\micromenu.lua
+src\options.lua
