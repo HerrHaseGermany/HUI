@@ -8,17 +8,26 @@ HUI.frame = f
 local function defaultDB()
 	return {
 		scale = 1,
+		moversUnlocked = false,
 		enable = {
-			unitframes = true,
+			unitframes = false,
 			actionbars = true,
-			minimap = true,
 			chat = true,
 			micromenu = true,
 		},
-		player = { x = -260, y = -220, w = 240, h = 28 },
-		target = { x = 260, y = -220, w = 240, h = 28 },
-		targettarget = { x = 260, y = -255, w = 160, h = 22 },
-		minimap = { x = -20, y = -20, size = 170 },
+		unitframes = {
+			player = {
+				x = -260,
+				y = -220,
+				w = 260,
+				healthH = 28,
+				powerH = 18,
+				castH = 22,
+				petHealthH = 18,
+				petPowerH = 14,
+				gap = 4,
+			},
+		},
 		chat = { x = 20, y = 20, w = 420, h = 200 },
 		actionbars = { x = 0, y = 40, scale = 1 },
 		micromenu = { x = 0, y = 4, scale = 0.95 },

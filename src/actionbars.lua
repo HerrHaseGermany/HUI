@@ -4,8 +4,8 @@ local U = HUI.util
 local M = { name = "actionbars" }
 table.insert(HUI.modules, M)
 
-local holder
 local orig
+local mover
 
 local art = {
 	MainMenuBarArtFrameBackground,
@@ -110,10 +110,32 @@ end
 
 function M:Apply(db)
 	if db.enable and db.enable.actionbars == false then
+		if mover then mover:Hide() end
 		restore()
 		return
 	end
 	snapshot()
 	hideArt()
 	layoutPrimary(db.actionbars or {})
+
+	local cfg = db.actionbars or {}
+	if db.moversUnlocked then
+		if not mover then
+			mover = U.CreateMover("HUI_ActionBarsMover", "Actionbars")
+			mover._huiOnMoved = function(self)
+				local _, _, _, x, y = self:GetPoint(1)
+				local db2 = HUI:GetDB()
+				db2.actionbars.x = x
+				db2.actionbars.y = y
+				HUI:ApplyAll()
+			end
+		end
+		mover:SetSize(520, 40)
+		mover:ClearAllPoints()
+		mover:SetPoint("BOTTOM", UIParent, "BOTTOM", cfg.x or 0, cfg.y or 40)
+		mover:SetScale(cfg.scale or 1)
+		mover:Show()
+	else
+		if mover then mover:Hide() end
+	end
 end

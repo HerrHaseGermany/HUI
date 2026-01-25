@@ -2,9 +2,7 @@
 Hase UI (HUI) is a lightweight World of Warcraft Classic (Hardcore) UI addon focused on speed and simplicity.
 
 ## Features
-- Custom unitframes: Player, Target, and TargetTarget
 - Actionbar layout tweaks (moves primary bars, hides some default art)
-- Custom minimap container (position + size)
 - Chat layout (position + size) and hides some default chat buttons
 - Micromenu layout (position + scale)
 - Per-element toggles: switch each element between Blizzard and HUI
@@ -17,7 +15,7 @@ Hase UI (HUI) is a lightweight World of Warcraft Classic (Hardcore) UI addon foc
 3. Launch WoW and enable `HUI` at the character select AddOns button.
 
 ## Usage
-Open the options panel:
+Open the options window:
 - `/hui`
 
 Reset HUI settings to defaults:
@@ -27,12 +25,12 @@ Reload the UI (useful after making lots of changes):
 - Click `Reload UI` in the HUI options panel, or run `/reload`.
 
 ## Options
-Find HUI at:
-- `Esc` → `Options` → `AddOns` → `HUI`
+Open HUI options via:
+- `/hui`
+- `Esc` → `HUI`
 
 ### Enable/disable modules
 Each major element can be toggled independently:
-- Custom Unitframes
 - Custom Actionbars
 - Custom Minimap
 - Custom Chat
@@ -43,8 +41,6 @@ When a toggle is disabled, HUI attempts to restore Blizzard positioning/visibili
 ### Layout editing
 The options panel lets you edit:
 - Global scale
-- Unitframe positions and sizes (player/target/targettarget)
-- Minimap position and size
 - Chat position and size
 - Actionbars position and scale
 - Micromenu position and scale

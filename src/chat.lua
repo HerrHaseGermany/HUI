@@ -5,6 +5,7 @@ local M = { name = "chat" }
 table.insert(HUI.modules, M)
 
 local orig
+local mover
 
 local function hideButtons()
 	U.SafeHide(ChatFrameMenuButton)
@@ -45,20 +46,55 @@ end
 local function applyChat(cfg)
 	local f = _G.ChatFrame1
 	if not f then return end
-	f:SetClampRectInsets(0, 0, 0, 0)
-	f:SetMaxResize(cfg.w, cfg.h)
-	f:SetMinResize(cfg.w, cfg.h)
-	f:SetSize(cfg.w, cfg.h)
+
+	local w = cfg.w or f:GetWidth() or 420
+	local h = cfg.h or f:GetHeight() or 200
+	local x = cfg.x or 20
+	local y = cfg.y or 20
+
+	if f.SetClampRectInsets then
+		f:SetClampRectInsets(0, 0, 0, 0)
+	end
+	if f.SetMaxResize then
+		f:SetMaxResize(w, h)
+	end
+	if f.SetMinResize then
+		f:SetMinResize(w, h)
+	end
+	f:SetSize(w, h)
 	f:ClearAllPoints()
-	f:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", cfg.x, cfg.y)
+	f:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", x, y)
 end
 
 function M:Apply(db)
 	if db.enable and db.enable.chat == false then
+		if mover then mover:Hide() end
 		restore()
 		return
 	end
 	snapshot()
 	hideButtons()
 	applyChat(db.chat or {})
+
+	local cfg = db.chat or {}
+	if db.moversUnlocked then
+		local w = cfg.w or (_G.ChatFrame1 and _G.ChatFrame1:GetWidth()) or 420
+		local h = cfg.h or (_G.ChatFrame1 and _G.ChatFrame1:GetHeight()) or 200
+		if not mover then
+			mover = U.CreateMover("HUI_ChatMover", "Chat")
+			mover._huiOnMoved = function(self)
+				local _, _, _, x, y = self:GetPoint(1)
+				local db2 = HUI:GetDB()
+				db2.chat.x = x
+				db2.chat.y = y
+				HUI:ApplyAll()
+			end
+		end
+		mover:SetSize(w, h)
+		mover:ClearAllPoints()
+		mover:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", cfg.x or 20, cfg.y or 20)
+		mover:Show()
+	else
+		if mover then mover:Hide() end
+	end
 end

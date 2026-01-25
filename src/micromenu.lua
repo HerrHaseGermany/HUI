@@ -5,6 +5,7 @@ table.insert(HUI.modules, M)
 
 local holder
 local orig
+local mover
 
 local microButtons = {
 	"CharacterMicroButton",
@@ -75,10 +76,52 @@ end
 
 function M:Apply(db)
 	if db.enable and db.enable.micromenu == false then
+		if mover then mover:Hide() end
 		restore()
 		return
 	end
 	snapshot()
+	ensure()
+	if not holder then return end
 	holder:Show()
 	apply(db.micromenu or {})
+
+	local cfg = db.micromenu or {}
+	if db.moversUnlocked then
+		if not mover then
+			mover = CreateFrame("Frame", "HUI_MicroMenuMover", UIParent, "BackdropTemplate")
+			mover:SetFrameStrata("DIALOG")
+			mover:SetClampedToScreen(true)
+			mover:SetMovable(true)
+			mover:EnableMouse(true)
+			mover:RegisterForDrag("LeftButton")
+			mover:SetBackdrop({ edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
+			mover:SetBackdropBorderColor(1, 0.82, 0, 1)
+			mover:SetBackdropColor(0, 0, 0, 0.35)
+
+			local t = HUI.util.Font(mover, 12, true)
+			t:SetPoint("CENTER", mover, "CENTER", 0, 0)
+			t:SetText("Micromenu")
+
+			mover:SetScript("OnDragStart", function(self)
+				if InCombatLockdown and InCombatLockdown() then return end
+				self:StartMoving()
+			end)
+			mover:SetScript("OnDragStop", function(self)
+				self:StopMovingOrSizing()
+				local _, _, _, x, y = self:GetPoint(1)
+				local db2 = HUI:GetDB()
+				db2.micromenu.x = x
+				db2.micromenu.y = y
+				HUI:ApplyAll()
+			end)
+		end
+		mover:SetSize(520, 24)
+		mover:ClearAllPoints()
+		mover:SetPoint("BOTTOM", UIParent, "BOTTOM", cfg.x or 0, cfg.y or 4)
+		mover:SetScale(cfg.scale or 0.95)
+		mover:Show()
+	else
+		if mover then mover:Hide() end
+	end
 end

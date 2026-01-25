@@ -7,9 +7,8 @@
 
 src\util.lua
 src\core.lua
-src\unitframes.lua
 src\actionbars.lua
-src\minimap.lua
 src\chat.lua
 src\micromenu.lua
+src\unitframes.lua
 src\options.lua
