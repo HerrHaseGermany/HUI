@@ -10,26 +10,20 @@ local function defaultDB()
 		scale = 1,
 		moversUnlocked = false,
 		enable = {
-			unitframes = false,
+			unitframes = true,
 			actionbars = true,
 			chat = true,
 			micromenu = true,
 		},
-		unitframes = {
-			player = {
-				x = -260,
-				y = -220,
-				w = 260,
-				healthH = 28,
-				powerH = 18,
-				castH = 22,
-				petHealthH = 18,
-				petPowerH = 14,
-				gap = 4,
-			},
-		},
 		chat = { x = 20, y = 20, w = 420, h = 200 },
-		actionbars = { x = 0, y = 40, scale = 1 },
+		actionbars = {
+			-- Legacy defaults (still used as fallbacks)
+			x = 0,
+			y = 40,
+			scale = 1,
+			-- Per-bar positioning
+			bars = {},
+		},
 		micromenu = { x = 0, y = 4, scale = 0.95 },
 		colors = {
 			health = { 0.10, 0.85, 0.10 },

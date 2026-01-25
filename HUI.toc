@@ -8,7 +8,11 @@
 src\util.lua
 src\core.lua
 src\actionbars.lua
-src\chat.lua
+src\xpbar.lua
 src\micromenu.lua
+src\tooltip.lua
+src\mirrortimers.lua
+src\errors.lua
+src\nameplates.lua
+src\combopoints.lua
 src\unitframes.lua
-src\options.lua
