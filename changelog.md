@@ -1,5 +1,8 @@
 ## Changelog
 
+# TODO Nameplates
+- TODO Minimap
+
 # 0.1.0
 
 - Micromenu: fixed per-button coordinates (stable ordering + vertical layout)
