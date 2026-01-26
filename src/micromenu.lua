@@ -1,251 +1,322 @@
 local ADDON_NAME, HUI = ...
 
+local U = HUI.util
+
 local M = { name = "micromenu" }
 table.insert(HUI.modules, M)
 
 local holder
-local orig
 local mover
+local buttons
 
-local microButtonNames = {
-	"CharacterMicroButton",
-	"SpellbookMicroButton",
-	"TalentMicroButton",
-	"AchievementMicroButton",
-	"QuestLogMicroButton",
-	"GuildMicroButton",
-	"LFDMicroButton",
-	"CollectionsMicroButton",
-	"EJMicroButton",
-	"HelpMicroButton",
-	"SupportMicroButton",
-	"StoreMicroButton",
-	"MainMenuMicroButton",
-	-- Keep these last so they win when overlapping.
-	"SocialMicroButton",
-	"FriendsMicroButton",
-}
+local BUTTON_W, BUTTON_H = 26, 34
+local ICON_W, ICON_H = 26, 35
 
-local microButtonIndex = {}
-for i, name in ipairs(microButtonNames) do
-	microButtonIndex[name] = i
+local function setPlayerPortrait(tex)
+	if not tex then return end
+	if type(_G.SetPortraitTextureFromUnit) == "function" then
+		_G.SetPortraitTextureFromUnit(tex, "player")
+	elseif type(_G.SetPortraitTexture) == "function" then
+		_G.SetPortraitTexture(tex, "player")
+	end
+	if tex.SetTexCoord then tex:SetTexCoord(0, 1, 0, 1) end
 end
 
--- Per-button coordinates (pixels) relative to the holder's TOPLEFT.
--- `x` increases right, `y` increases down.
--- Customize these to place each button exactly where you want.
-local microButtonCoords = {
-	CharacterMicroButton = { x = 0, y = 50 },
-	SpellbookMicroButton = { x = 0, y = 40 },
-	TalentMicroButton = { x = 0, y = 30 },
-	AchievementMicroButton = { x = 0, y = 0 },
-	QuestLogMicroButton = { x = 0, y = 0 },
-	SocialMicroButton = { x = 0, y = 0 },
-	FriendsMicroButton = { x = 0, y = 0 },
-	GuildMicroButton = { x = 0, y = 0 },
-	LFDMicroButton = { x = 0, y = 0 },
-	CollectionsMicroButton = { x = 0, y = 0 },
-	EJMicroButton = { x = 0, y = 0 },
-	HelpMicroButton = { x = 0, y = 0 },
-	SupportMicroButton = { x = 0, y = 0 },
-	StoreMicroButton = { x = 0, y = 0 },
-	MainMenuMicroButton = { x = 0, y = 0 },
-}
+local function callToggle(fn, ...)
+	if InCombatLockdown and InCombatLockdown() then return end
+	if type(fn) == "function" then fn(...) end
+end
 
-local function getButtons()
-	local out = {}
-	local seen = {}
-	local function scanChildren(frame, depth)
-		if not frame or not frame.GetChildren or depth <= 0 then return end
-		-- Safety guard: prevent pathological scans.
-		scanChildren._n = (scanChildren._n or 0) + 1
-		if scanChildren._n > 800 then return end
-		for _, child in ipairs({ frame:GetChildren() }) do
-			if child and child.GetName then
-				local n = child:GetName()
-				if n and n:find("MicroButton") and not seen[child] then
-					seen[child] = true
-					out[#out + 1] = child
+local entries = {
+	{
+		key = "Character",
+		tooltip = "Character",
+		micro = "CharacterMicroButton",
+		portraitOverlay = true,
+		run = function() callToggle(_G.ToggleCharacter, "PaperDollFrame") end,
+	},
+	{
+		key = "Spellbook",
+		tooltip = "Spellbook",
+		micro = "SpellbookMicroButton",
+		run = function()
+			callToggle(_G.ToggleSpellBook, _G.BOOKTYPE_SPELL or "spell")
+		end,
+	},
+	{
+		key = "Talents",
+		tooltip = "Talents",
+		micro = "TalentMicroButton",
+		enabled = function()
+			return (_G.UnitLevel and _G.UnitLevel("player") or 0) >= 10 and type(_G.ToggleTalentFrame) == "function"
+		end,
+		run = function() callToggle(_G.ToggleTalentFrame) end,
+	},
+	{
+		key = "Quests",
+		tooltip = "Quest Log",
+		micro = "QuestLogMicroButton",
+		run = function() callToggle(_G.ToggleQuestLog) end,
+	},
+	{
+		key = "Social",
+		tooltip = "Friends / Social",
+		micro = "GuildMicroButton",
+		run = function()
+			callToggle(_G.ToggleFriendsFrame or _G.FriendsFrame_ToggleFriendsFrame)
+		end,
+	},
+	{
+		key = "Guild",
+		tooltip = "Guild",
+		micro = "GuildMicroButton",
+		enabled = function()
+			return (_G.IsInGuild and _G.IsInGuild()) and type(_G.ToggleGuildFrame) == "function"
+		end,
+		run = function() callToggle(_G.ToggleGuildFrame) end,
+	},
+	{
+		key = "Map",
+		tooltip = "World Map",
+		micro = "WorldMapMicroButton",
+		enabled = function()
+			return type(_G.ToggleWorldMap) == "function"
+				or type(_G.ToggleMapFrame) == "function"
+				or (_G.WorldMapFrame and _G.WorldMapFrame.Show)
+		end,
+		run = function()
+			if type(_G.ToggleWorldMap) == "function" then
+				callToggle(_G.ToggleWorldMap)
+				return
+			end
+			if type(_G.ToggleMapFrame) == "function" then
+				callToggle(_G.ToggleMapFrame)
+				return
+			end
+			local f = _G.WorldMapFrame
+			if f and f.IsShown and f:IsShown() then
+				if type(_G.HideUIPanel) == "function" then
+					_G.HideUIPanel(f)
+				elseif f.Hide then
+					f:Hide()
+				end
+			else
+				if type(_G.ShowUIPanel) == "function" then
+					_G.ShowUIPanel(f)
+				elseif f and f.Show then
+					f:Show()
 				end
 			end
-			scanChildren(child, depth - 1)
-		end
-	end
-
-	-- Retail-style globals (also present on some Classic builds).
-	for _, name in ipairs(microButtonNames) do
-		local b = _G[name]
-		if b then
-			if not seen[b] then
-				seen[b] = true
-				out[#out + 1] = b
-			end
-		end
-	end
-
-	-- Classic: micro buttons are often managed by MicroButtonAndBagsBar.
-	local bar = _G.MicroButtonAndBagsBar
-	if not bar then return out end
-
-	if bar.MicroButtons then
-		for _, b in ipairs(bar.MicroButtons) do
-			if b and not seen[b] then
-				seen[b] = true
-				out[#out + 1] = b
-			end
-		end
-	end
-
-	-- Also scan deeper for any named MicroButtons not in MicroButtons.
-	scanChildren(bar, 6)
-
-	-- Some builds keep buttons outside the bar; catch any remaining named MicroButtons on UIParent.
-	scanChildren(UIParent, 6)
-
-	return out
-end
+		end,
+	},
+	{
+		key = "Support",
+		tooltip = "Help / Support",
+		micro = "HelpMicroButton",
+		enabled = function()
+			return type(_G.ToggleHelpFrame) == "function" or type(_G.HelpMicroButton_OnClick) == "function"
+		end,
+		run = function()
+			callToggle(_G.ToggleHelpFrame or _G.HelpMicroButton_OnClick)
+		end,
+	},
+}
 
 local function ensure()
 	if holder then return end
 	holder = CreateFrame("Frame", "HUI_MicroMenuHolder", UIParent)
 	holder:SetSize(1, 1)
+	holder:SetFrameStrata("MEDIUM")
 end
 
-local function snapshot()
-	if orig then return end
-	orig = { buttons = {} }
-	for _, b in ipairs(getButtons()) do
-		if b and b.GetPoint then
-			orig.buttons[b] = { parent = b.GetParent and b:GetParent() or nil, point = { b:GetPoint(1) } }
+local function ensureButtons()
+	if buttons then return end
+	buttons = {}
+
+	for i, e in ipairs(entries) do
+		local template = e.secureClick and "SecureActionButtonTemplate,BackdropTemplate" or "BackdropTemplate"
+		local b = CreateFrame("Button", "HUI_MicroMenuButton" .. i, holder, template)
+		b:SetSize(BUTTON_W, BUTTON_H)
+		b:RegisterForClicks("AnyUp")
+		b:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8" })
+		b:SetBackdropColor(0.05, 0.05, 0.05, 0.75)
+
+		local icon = b:CreateTexture(nil, "ARTWORK")
+		icon:ClearAllPoints()
+		icon:SetPoint("BOTTOM", b, "BOTTOM", 0, -2)
+		icon:SetSize(ICON_W, ICON_H)
+		if e.micro and _G[e.micro] and _G[e.micro].GetNormalTexture then
+			local tex = _G[e.micro]:GetNormalTexture()
+			if tex and tex.GetTexture then
+				icon:SetTexture(tex:GetTexture())
+				-- Micro button normal textures often contain multiple states stacked vertically.
+				-- Cropping to the lower half makes the glyph fill our custom button.
+				icon:SetTexCoord(0.08, 0.92, 0.42, 1)
+			end
 		end
+		b._huiIcon = icon
+
+			if e.portraitOverlay and (type(_G.SetPortraitTextureFromUnit) == "function" or type(_G.SetPortraitTexture) == "function") then
+				local p = b:CreateTexture(nil, "OVERLAY")
+				p:ClearAllPoints()
+				p:SetPoint("TOP", b, "TOP", 0, -2)
+				p:SetSize(20, 24)
+				setPlayerPortrait(p)
+				b._huiPortrait = p
+			end
+
+		local hl = b:CreateTexture(nil, "HIGHLIGHT")
+		hl:SetAllPoints()
+		hl:SetTexture("Interface\\Buttons\\WHITE8x8")
+		hl:SetVertexColor(1, 0.82, 0, 0.15)
+
+		if not e.micro then
+			local t = U.Font(b, 12, true)
+			t:SetPoint("CENTER", b, "CENTER", 0, 0)
+			t:SetJustifyH("CENTER")
+			t:SetText((e.key and e.key:sub(1, 1)) or "?")
+			b._huiLabel = t
+		end
+
+		if e.secureClick then
+			b:SetAttribute("type", "click")
+			b._huiSecureClickName = e.secureClick
+		else
+			b:SetScript("OnClick", function()
+				if e.run then e.run() end
+			end)
+		end
+		b:SetScript("OnEnter", function(self)
+			if not GameTooltip then return end
+			GameTooltip:SetOwner(self, "ANCHOR_LEFT")
+			GameTooltip:SetText(e.tooltip or e.key or "Button")
+			GameTooltip:Show()
+		end)
+		b:SetScript("OnLeave", function()
+			if GameTooltip then GameTooltip:Hide() end
+		end)
+
+		buttons[i] = b
 	end
 end
 
-local function restore()
-	if not orig or not orig.buttons then return end
-	if holder then holder:Hide() end
-	for b, o in pairs(orig.buttons) do
-		if b and o and b.ClearAllPoints then
-			if b.SetParent then b:SetParent(o.parent or UIParent) end
-			b.ignoreFramePositionManager = nil
-			b:ClearAllPoints()
-			if o.point and o.point[1] then b:SetPoint(unpack(o.point)) end
+local function disableBlizzardMicroMenu()
+	if _G.MicroButtonAndBagsBar and U and U.UnregisterAndHide then
+		U.UnregisterAndHide(_G.MicroButtonAndBagsBar)
+	end
+
+	local names = {
+		"CharacterMicroButton",
+		"SpellbookMicroButton",
+		"TalentMicroButton",
+		"QuestLogMicroButton",
+		"SocialsMicroButton",
+		"FriendsMicroButton",
+		"GuildMicroButton",
+		"LFDMicroButton",
+		"CollectionsMicroButton",
+		"EJMicroButton",
+		"HelpMicroButton",
+		"SupportMicroButton",
+		"StoreMicroButton",
+		"WorldMapMicroButton",
+		"MainMenuMicroButton",
+	}
+	for _, n in ipairs(names) do
+		local b = _G[n]
+		if b and U and U.UnregisterAndHide then
+			U.UnregisterAndHide(b)
+		elseif b and b.Hide then
+			b:Hide()
+		end
+	end
+
+	-- Some Classic builds surface a separate social/menu button near chat.
+	local chatButtons = { "ChatFrameMenuButton", "FriendsFrameMicroButton" }
+	for _, n in ipairs(chatButtons) do
+		local b = _G[n]
+		if b and U and U.UnregisterAndHide then
+			U.UnregisterAndHide(b)
+		elseif b and b.Hide then
+			b:Hide()
 		end
 	end
 end
 
 local function apply(cfg)
-	if InCombatLockdown() then return end
+	if InCombatLockdown and InCombatLockdown() then return end
 	ensure()
+	ensureButtons()
 
+	-- Disable Blizzard micro menu (we provide our own).
+	disableBlizzardMicroMenu()
+
+	local scale = cfg.scale or 0.95
+	holder:SetScale(scale)
 	holder:ClearAllPoints()
-	holder:SetPoint("RIGHT", UIParent, "RIGHT", -30, 0)
-	holder:SetScale(cfg.scale or 1)
+	holder:SetPoint("RIGHT", UIParent, "RIGHT", 0, -200)
 
-	-- Ensure Blizzard's container bar doesn't stay hidden.
-	if _G.MicroButtonAndBagsBar and _G.MicroButtonAndBagsBar.Show then
-		_G.MicroButtonAndBagsBar:Show()
-	end
+	local gap = 0
+	local bw, bh = BUTTON_W, BUTTON_H
+	holder:SetSize(bw, (#buttons * bh) + math.max(0, (#buttons - 1) * gap))
 
-	local buttons = getButtons()
-	local gapY = 0
-
-	-- Stable per-button coordinates: build a deterministic ordering keyed by button name.
-	local placed = {}
-	local ordered = {}
-	for _, b in ipairs(buttons) do
-		if b and not placed[b] then
-			placed[b] = true
-			local n = b.GetName and b:GetName() or nil
-			local idx = n and microButtonIndex[n] or 1000
-			ordered[#ordered + 1] = { idx = idx, button = b }
-		end
-	end
-	table.sort(ordered, function(a, b)
-		if a.idx ~= b.idx then return a.idx < b.idx end
-		local an = a.button and a.button.GetName and a.button:GetName() or ""
-		local bn = b.button and b.button.GetName and b.button:GetName() or ""
-		return an < bn
-	end)
-
-	local b1 = ordered[1] and ordered[1].button or nil
-	if b1 and b1.GetWidth and b1.GetHeight and holder.SetSize then
-		local bw = b1:GetWidth() or 28
-		local bh = b1:GetHeight() or 28
-		holder:SetSize(bw, (#ordered * bh) + math.max(0, (#ordered - 1) * gapY))
-	end
-
-	local bw, bh = 28, 28
-	if b1 and b1.GetWidth and b1.GetHeight then
-		bw = b1:GetWidth() or bw
-		bh = b1:GetHeight() or bh
-	end
-
-	-- Force all micro buttons to the same spot (overlapping) at the right side of the screen.
-	holder:SetSize(bw, bh)
-
-	for i, entry in ipairs(ordered) do
-		local b = entry.button
-		if b and b.ClearAllPoints then
-			if b.SetParent then b:SetParent(holder) end
-			b.ignoreFramePositionManager = true
+		for i, b in ipairs(buttons) do
 			b:ClearAllPoints()
-			b:SetPoint("CENTER", holder, "CENTER", 0, 0)
-			if b.Show then b:Show() end
-		end
+			b:SetPoint("TOP", holder, "TOP", 0, -((i - 1) * (bh + gap)))
+
+			local e = entries[i]
+				if e and e.portraitOverlay and b._huiPortrait then
+					setPlayerPortrait(b._huiPortrait)
+				end
+			if e and e.secureClick and b._huiSecureClickName then
+				local target = _G[b._huiSecureClickName]
+				if target then b:SetAttribute("clickbutton", target) end
+			end
+		local enabled = e
+			and (e.run ~= nil or e.secureClick ~= nil)
+			and (not e.enabled or e.enabled())
+			and (not e.secureClick or _G[e.secureClick] ~= nil)
+		b:SetAlpha(enabled and 1 or 0.35)
+		b:EnableMouse(enabled)
 	end
 end
 
 function M:Apply(db)
-	snapshot()
 	ensure()
-	if not holder then return end
 	holder:Show()
-	apply(db.micromenu or {})
+	apply((db and db.micromenu) or {})
 
-	-- Blizzard's frame position manager can move/hide micro buttons; re-apply after it runs.
-	if not M._huiHookedPositions and hooksecurefunc then
-		M._huiHookedPositions = true
+	-- Blizzard can re-show/reposition these; keep them hidden.
+	if not M._huiHideBlizzMicroHooked and hooksecurefunc then
+		M._huiHideBlizzMicroHooked = true
 		hooksecurefunc("UIParent_ManageFramePositions", function()
 			if InCombatLockdown and InCombatLockdown() then return end
-			local db2 = HUI:GetDB()
-			apply(db2.micromenu or {})
+			disableBlizzardMicroMenu()
 		end)
+		if type(_G.UpdateMicroButtons) == "function" then
+			hooksecurefunc("UpdateMicroButtons", function()
+				if InCombatLockdown and InCombatLockdown() then return end
+				disableBlizzardMicroMenu()
+			end)
+		end
 	end
 
-	local cfg = db.micromenu or {}
-	if db.moversUnlocked then
+	local cfg = (db and db.micromenu) or {}
+	if db and db.moversUnlocked then
 		if not mover then
-			mover = CreateFrame("Frame", "HUI_MicroMenuMover", UIParent, "BackdropTemplate")
-			mover:SetFrameStrata("DIALOG")
-			mover:SetClampedToScreen(true)
-			mover:SetMovable(true)
-			mover:EnableMouse(true)
-			mover:RegisterForDrag("LeftButton")
-			mover:SetBackdrop({ edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
-			mover:SetBackdropBorderColor(1, 0.82, 0, 1)
-			mover:SetBackdropColor(0, 0, 0, 0.35)
-
-			local t = HUI.util.Font(mover, 12, true)
-			t:SetPoint("CENTER", mover, "CENTER", 0, 0)
-			t:SetText("Micromenu")
-
-			mover:SetScript("OnDragStart", function(self)
-				if InCombatLockdown and InCombatLockdown() then return end
-				self:StartMoving()
-			end)
-			mover:SetScript("OnDragStop", function(self)
-				self:StopMovingOrSizing()
+			mover = U.CreateMover("HUI_MicroMenuMover", "Micromenu")
+			mover._huiOnMoved = function(self)
 				local _, _, _, x, y = self:GetPoint(1)
 				local db2 = HUI:GetDB()
 				db2.micromenu.x = x
 				db2.micromenu.y = y
 				HUI:ApplyAll()
-			end)
+			end
 		end
-		mover:SetSize(10, 520)
+
+		mover:SetSize(26, 26 * #entries)
 		mover:ClearAllPoints()
-		mover:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
+		mover:SetPoint("RIGHT", UIParent, "RIGHT", -30, 0)
 		mover:SetScale(cfg.scale or 0.95)
 		mover:Show()
 	else
