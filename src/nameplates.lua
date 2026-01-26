@@ -14,6 +14,10 @@ local LEVEL_FRAME_W, LEVEL_FRAME_H = 48, 48
 local LEVEL_FONT_SIZE = 18
 local PVP_BADGE_W, PVP_BADGE_H = 60, 60
 local PVP_BADGE_GAP = 42
+local QUEST_ICON_W, QUEST_ICON_H = 22, 22
+
+local QUEST_ICON_AVAILABLE = "Interface\\GossipFrame\\AvailableQuestIcon"
+local QUEST_ICON_ACTIVE = "Interface\\GossipFrame\\ActiveQuestIcon"
 
 local function unitNameColor(unit)
 	-- Match Blizzard-style unit name coloring (class for players, reaction for NPCs).
@@ -189,6 +193,89 @@ local function updateRaidMark(uf, unit)
 	tex:Show()
 end
 
+local function ensureCenterRaidMark()
+	if M._centerRaidMark then return end
+	local f = CreateFrame("Frame", "HUI_RaidMarkCenter", UIParent)
+	f:SetSize(32, 32)
+	f:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
+	f:SetFrameStrata("TOOLTIP")
+	f:Hide()
+	local t = f:CreateTexture(nil, "OVERLAY", nil, 7)
+	t:SetAllPoints(f)
+	f._tex = t
+	M._centerRaidMark = f
+end
+
+local function updateCenterRaidMark()
+	ensureCenterRaidMark()
+	local f = M._centerRaidMark
+	if not f then return end
+
+	if not (UnitExists and UnitExists("target")) then
+		f:Hide()
+		return
+	end
+
+	local idx = GetRaidTargetIndex and GetRaidTargetIndex("target") or nil
+	if not idx or idx < 1 or idx > 8 then
+		f:Hide()
+		return
+	end
+
+	if SetRaidTargetIconTexture then
+		SetRaidTargetIconTexture(f._tex, idx)
+	else
+		f._tex:SetTexture("Interface\\TargetingFrame\\UI-RaidTargetingIcons")
+		local left = (idx - 1) / 8
+		local right = idx / 8
+		f._tex:SetTexCoord(left, right, 0, 1)
+	end
+	f:Show()
+end
+
+local function updateQuestMark(uf, unit)
+	local tex = uf and uf._HUIQuestMark
+	if not tex or not unit or not UnitExists or not UnitExists(unit) then
+		if tex then tex:Hide() end
+		return
+	end
+
+	if UnitIsPlayer and UnitIsPlayer(unit) then
+		tex:Hide()
+		return
+	end
+
+	local isFriendly = UnitIsFriend and UnitIsFriend("player", unit)
+	if not isFriendly then
+		tex:Hide()
+		return
+	end
+
+	local icon
+	if C_QuestLog and C_QuestLog.GetQuestsForUnit then
+		local qs = C_QuestLog.GetQuestsForUnit(unit)
+		if qs and #qs > 0 then
+			icon = QUEST_ICON_AVAILABLE
+			for _, q in ipairs(qs) do
+				if q and (q.isComplete or q.isActive) then
+					icon = QUEST_ICON_ACTIVE
+					break
+				end
+			end
+		end
+	elseif UnitIsQuestGiver and UnitIsQuestGiver(unit) then
+		icon = QUEST_ICON_AVAILABLE
+	end
+
+	if not icon then
+		tex:Hide()
+		return
+	end
+
+	tex:SetTexture(icon)
+	tex:Show()
+end
+
 local function targetLevelColor(unit, lvl)
 	-- Match our target frame rules:
 	-- - Friendly units: white
@@ -318,6 +405,11 @@ local function ensurePlate(unit)
 	bg:SetVertexColor(0, 0, 0, 0.6)
 	bar._huiBg = bg
 
+	local iconHolder = CreateFrame("Frame", nil, bar)
+	iconHolder:SetAllPoints(bar)
+	iconHolder:SetFrameLevel((bar:GetFrameLevel() or 0) + 50)
+	uf._HUIIconHolder = iconHolder
+
 	local nameText = bar:CreateFontString(nil, "OVERLAY")
 	nameText:SetPoint("CENTER", bar, "CENTER", 0, 0)
 	nameText:SetJustifyH("CENTER")
@@ -330,12 +422,6 @@ local function ensurePlate(unit)
 	subText:SetFont(STANDARD_TEXT_FONT, SUB_SIZE, "THICKOUTLINE")
 	subText:Hide()
 	uf._HUISub = subText
-
-	local raidMark = bar:CreateTexture(nil, "OVERLAY", nil, 7)
-	raidMark:SetSize(24, 24)
-	raidMark:SetPoint("BOTTOM", bar, "TOP", 0, 2)
-	raidMark:Hide()
-	uf._HUIRaidMark = raidMark
 
 	local levelBadge = CreateFrame("Frame", nil, bar)
 	levelBadge:SetSize(LEVEL_BADGE_W, LEVEL_BADGE_H)
@@ -371,6 +457,20 @@ local function ensurePlate(unit)
 	levelText:SetJustifyH("CENTER")
 	levelText:SetFont(STANDARD_TEXT_FONT, LEVEL_FONT_SIZE, "THICKOUTLINE")
 	uf._HUILevel = levelText
+
+	-- Raid mark on the bar (inside the plate), on a higher frame level so it can't be occluded.
+	local raidMark = iconHolder:CreateTexture(nil, "OVERLAY", nil, 7)
+	raidMark:SetSize(20, 20)
+	raidMark:SetPoint("TOP", bar, "TOP", 0, 25)
+	raidMark:Hide()
+	uf._HUIRaidMark = raidMark
+
+	-- Quest marker ( ! / ? ) above the plate.
+	local questMark = uf:CreateTexture(nil, "OVERLAY", nil, 7)
+	questMark:SetSize(QUEST_ICON_W, QUEST_ICON_H)
+	questMark:SetPoint("BOTTOM", bar, "TOP", 0, 8)
+	questMark:Hide()
+	uf._HUIQuestMark = questMark
 
 	local pvpBadge = CreateFrame("Frame", nil, bar)
 	pvpBadge:SetSize(PVP_BADGE_W, PVP_BADGE_H)
@@ -443,6 +543,10 @@ local function updatePlate(unit, what)
 			showSub = sub ~= ""
 		end
 
+		updateRaidMark(uf, unit)
+		updatePvPBadge(uf, unit)
+		updateQuestMark(uf, unit)
+
 		uf._HUIName:ClearAllPoints()
 		if showSub then
 			uf._HUIName:SetPoint("TOP", uf._HUIBar, "TOP", 0, -4)
@@ -454,14 +558,22 @@ local function updatePlate(unit, what)
 			uf._HUISub:SetText("")
 		end
 
-		fitText(uf._HUIName, name, TEXT_MAX_W, NAME_SIZE, MIN_NAME_SIZE)
+		local maxW = TEXT_MAX_W
+		if uf._HUIRaidMark and uf._HUIRaidMark:IsShown() then
+			maxW = maxW - 24
+		end
+		if uf._HUIQuestMark and uf._HUIQuestMark:IsShown() then
+			-- Quest marker is centered above, but keep a little extra headroom to avoid visual crowding.
+			maxW = maxW - 6
+		end
+		fitText(uf._HUIName, name, maxW, NAME_SIZE, MIN_NAME_SIZE)
 		if showSub then
 			fitTwoLine(
 				uf._HUIName,
 				uf._HUISub,
 				name,
 				sub,
-				TEXT_MAX_W,
+				maxW,
 				NAME_SIZE,
 				MIN_NAME_SIZE,
 				SUB_SIZE,
@@ -499,8 +611,6 @@ local function updatePlate(unit, what)
 			end
 		end
 
-		updatePvPBadge(uf, unit)
-		updateRaidMark(uf, unit)
 	end
 
 	if not what or what == "health" then
@@ -537,6 +647,17 @@ local function updateAllRaidMarks()
 		if u then
 			local uf = ensurePlate(u)
 			if uf then updateRaidMark(uf, u) end
+		end
+	end
+end
+
+local function updateAllQuestMarks()
+	if not (C_NamePlate and C_NamePlate.GetNamePlates) then return end
+	for _, plate in ipairs(C_NamePlate.GetNamePlates() or {}) do
+		local u = plate and plate.namePlateUnitToken
+		if u then
+			local uf = ensurePlate(u)
+			if uf then updateQuestMark(uf, u) end
 		end
 	end
 end
@@ -585,6 +706,8 @@ function M:Apply()
 		ev:RegisterEvent("PLAYER_ENTERING_WORLD")
 		ev:RegisterEvent("PLAYER_TARGET_CHANGED")
 		ev:RegisterEvent("RAID_TARGET_UPDATE")
+		ev:RegisterEvent("QUEST_LOG_UPDATE")
+		ev:RegisterEvent("GOSSIP_SHOW")
 		ev:RegisterEvent("NAME_PLATE_UNIT_ADDED")
 		ev:RegisterEvent("NAME_PLATE_UNIT_REMOVED")
 		ev:RegisterEvent("UNIT_NAME_UPDATE")
@@ -600,21 +723,32 @@ function M:Apply()
 					end
 				end
 				updateSelectionAlpha()
+				updateAllRaidMarks()
+				updateAllQuestMarks()
+				updateCenterRaidMark()
 				return
 			end
 			if event == "PLAYER_TARGET_CHANGED" then
 				updateSelectionAlpha()
 				updateAllRaidMarks()
+				updateAllQuestMarks()
+				updateCenterRaidMark()
 				return
 			end
 			if event == "RAID_TARGET_UPDATE" then
 				updateAllRaidMarks()
+				updateCenterRaidMark()
+				return
+			end
+			if event == "QUEST_LOG_UPDATE" or event == "GOSSIP_SHOW" then
+				updateAllQuestMarks()
 				return
 			end
 
 			if event == "NAME_PLATE_UNIT_ADDED" then
 				updatePlate(arg1)
 				updateSelectionAlpha()
+				updateAllQuestMarks()
 				return
 			end
 			if event == "NAME_PLATE_UNIT_REMOVED" then
@@ -622,6 +756,7 @@ function M:Apply()
 				local uf = plate and plate.UnitFrame
 				if uf then uf._HUIUnit = nil end
 				updateSelectionAlpha()
+				updateAllQuestMarks()
 				return
 			end
 
