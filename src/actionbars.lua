@@ -94,7 +94,7 @@ local CLASSBAR_X, CLASSBAR_Y = 0, 0
 
 -- Bag bar (backpack + 4 bag slots)
 local BAGS_POINT, BAGS_RELPOINT = "BOTTOMRIGHT", "BOTTOMRIGHT"
-local BAGS_X, BAGS_Y = 0, 70
+local BAGS_X, BAGS_Y = 0, 40
 local BAGS_SCALE = 1.2
 local BAGS_GAP_X = 4
 local BAGS_SHOW_ONLY_BACKPACK = true

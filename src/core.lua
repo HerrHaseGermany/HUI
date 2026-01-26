@@ -14,6 +14,7 @@ local function defaultDB()
 			actionbars = true,
 			chat = true,
 			micromenu = true,
+			minimap = true,
 		},
 		chat = { x = 20, y = 20, w = 420, h = 200 },
 		actionbars = {

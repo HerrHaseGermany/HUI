@@ -74,10 +74,17 @@ local LEVEL_FRAME_DESAT_BELOW_MAX = 0.0000001
 local LEVEL_FRAME_DESAT_AT_MAX = 0.0
 
 -- PvP badge (left of level badge)
-local PVP_BADGE_W = 40
-local PVP_BADGE_H = 40
+local PVP_BADGE_W = 80
+local PVP_BADGE_H = 80
 -- Negative values push the PvP badge towards the level badge (to the right).
-local PVP_BADGE_GAP = -17
+local PVP_BADGE_GAP = -50
+-- PvP timer (above the PvP badge for player)
+local PVP_TIMER_FONT_SIZE = 10
+local PVP_TIMER_OFFSET_X = -13
+local PVP_TIMER_OFFSET_Y = -3
+local PVP_TIMER_COLOR_R = 1
+local PVP_TIMER_COLOR_G = 1
+local PVP_TIMER_COLOR_B = 0.2
 
 -- Auras (hardcoded "options")
 local AURA_SIZE = 40
@@ -109,6 +116,39 @@ local function isHardcore()
 		return C_ClassicHardcore.IsHardcoreActive() and true or false
 	end
 	return false
+end
+
+-- PvP timer tracking:
+-- Some Classic builds can report a non-zero GetPVPTimer() on login and not update it reliably.
+-- Track the timer ourselves once observed so it can count down to 0 without requiring an event.
+local _huiPvPTimerStart
+local _huiPvPTimerMs
+
+local function pvpTimerRemainingMs()
+	if not GetPVPTimer then return 0 end
+
+	local now = GetTime and GetTime() or 0
+	local cachedRemaining = 0
+	if _huiPvPTimerStart and _huiPvPTimerMs then
+		cachedRemaining = _huiPvPTimerMs - ((now - _huiPvPTimerStart) * 1000)
+		if cachedRemaining < 0 then cachedRemaining = 0 end
+	end
+
+	local t = GetPVPTimer()
+	if type(t) ~= "number" or t <= 0 or t > 310000 then
+		_huiPvPTimerStart, _huiPvPTimerMs = nil, nil
+		return 0
+	end
+
+	-- Only "re-seed" the timer when it meaningfully increases (re-flagging), otherwise
+	-- keep counting down from our cached start to avoid a stuck constant value.
+	if not _huiPvPTimerStart or (t > cachedRemaining + 1000) then
+		_huiPvPTimerStart = now
+		_huiPvPTimerMs = t
+		return t
+	end
+
+	return cachedRemaining
 end
 
 local function getMaxPlayerLevel()
@@ -213,8 +253,8 @@ local function targetLevelColor(unit, lvl)
 	-- - Hostile/neutral units: level difficulty color (GetQuestDifficultyColor)
 	if UnitReaction then
 		local reaction = UnitReaction(unit, "player")
-		-- 4 = neutral, 5+ = friendly
-		if reaction and reaction >= 4 then
+		-- Only friendly (5+) is forced white; neutral should use difficulty like enemies.
+		if reaction and reaction >= 5 then
 			return 1, 1, 1
 		end
 	end
@@ -552,6 +592,16 @@ local function addPvPBadge(bar)
 	icon:SetAllPoints(badge)
 	badge._huiIcon = icon
 
+	local timerText = U.Font(badge, PVP_TIMER_FONT_SIZE, true)
+	if timerText.SetFont then timerText:SetFont(STANDARD_TEXT_FONT, PVP_TIMER_FONT_SIZE, "THICKOUTLINE") end
+	timerText:SetPoint("BOTTOM", badge, "TOP", PVP_TIMER_OFFSET_X, PVP_TIMER_OFFSET_Y)
+	timerText:SetJustifyH("CENTER")
+	if timerText.SetTextColor then timerText:SetTextColor(PVP_TIMER_COLOR_R, PVP_TIMER_COLOR_G, PVP_TIMER_COLOR_B, 1) end
+	timerText:SetText("")
+	timerText:Hide()
+	badge._huiTimerText = timerText
+	badge._huiTimerLastSec = nil
+
 	if bar._huiLevelBadge then
 		badge:SetPoint("RIGHT", bar._huiLevelBadge, "LEFT", -PVP_BADGE_GAP, 0)
 	else
@@ -560,6 +610,47 @@ local function addPvPBadge(bar)
 
 	bar._huiPvPBadge = badge
 	return badge
+end
+
+local function updatePvPBadge(bar, unit)
+	if not bar or not bar._huiPvPBadge then return end
+	if not unit or not UnitExists or not UnitExists(unit) then
+		bar._huiPvPBadge:Hide()
+		if bar._huiPvPBadge._huiTimerText then bar._huiPvPBadge._huiTimerText:Hide() end
+		return
+	end
+
+	local isPvp = (UnitIsPVP and UnitIsPVP(unit)) and true or false
+	local isFfa = (UnitIsPVPFreeForAll and UnitIsPVPFreeForAll(unit)) and true or false
+	if not isPvp and not isFfa then
+		bar._huiPvPBadge:Hide()
+		if bar._huiPvPBadge._huiTimerText then bar._huiPvPBadge._huiTimerText:Hide() end
+		return
+	end
+
+	local icon = bar._huiPvPBadge._huiIcon
+	if icon then
+		if isFfa then
+			icon:SetTexture("Interface\\TargetingFrame\\UI-PVP-FFA")
+		else
+			local faction = UnitFactionGroup and UnitFactionGroup(unit) or nil
+			if faction == "Alliance" then
+				icon:SetTexture("Interface\\TargetingFrame\\UI-PVP-Alliance")
+			elseif faction == "Horde" then
+				icon:SetTexture("Interface\\TargetingFrame\\UI-PVP-Horde")
+			else
+				icon:SetTexture("Interface\\TargetingFrame\\UI-PVP-FFA")
+			end
+		end
+	end
+
+	bar._huiPvPBadge:Show()
+	if bar._huiPvPBadge._huiTimerText then
+		bar._huiPvPBadge._huiTimerLastSec = nil
+		bar._huiPvPBadge._huiTimerLastMs = nil
+		bar._huiPvPBadge._huiTimerRunning = nil
+		bar._huiPvPBadge._huiTimerText:Hide()
+	end
 end
 
 local function isAutoAttacking()
@@ -712,6 +803,7 @@ local function ensureFrames()
 	local health = createBar(target, TARGET_HEALTH_H)
 	health:SetPoint("TOP", name, "BOTTOM", 0, -(TARGET_GAP + TARGET_NAME_GAP))
 	addLevelBadge(health)
+	addPvPBadge(health)
 	M._huiTargetHealth = health
 	applyBarFontSize(health, 12 + HEALTH_TEXT_SIZE_DELTA)
 
@@ -989,21 +1081,8 @@ local function updatePlayerBars()
 			health._huiLevelBorder:Hide()
 		end
 	end
-
-	-- PvP badge (only show when flagged).
-	if health._huiPvPBadge and health._huiPvPBadge._huiIcon then
-		local flagged = (UnitIsPVP and UnitIsPVP("player")) or (UnitIsPVPFreeForAll and UnitIsPVPFreeForAll("player"))
-		if flagged then
-			local faction = UnitFactionGroup and UnitFactionGroup("player") or nil
-			local atlas = (faction == "Horde") and "poi-horde" or "poi-alliance"
-			if health._huiPvPBadge._huiIcon.SetAtlas then
-				health._huiPvPBadge._huiIcon:SetAtlas(atlas, true)
-			end
-			health._huiPvPBadge:Show()
-		else
-			health._huiPvPBadge:Hide()
-		end
-	end
+	
+	updatePvPBadge(health, "player")
 	health._huiCenter:SetText(shortNumber(curH))
 	health._huiRight:SetText(formatPercent(curH, maxH))
 
@@ -1021,6 +1100,74 @@ local function updatePlayerBars()
 		power._huiRight:SetText("")
 	end
 	power._huiLeft:SetText("")
+end
+
+local function updatePlayerPvPRunoutTimer()
+	local health = M._huiPlayerHealth
+	local badge = health and health._huiPvPBadge
+	local timerText = badge and badge._huiTimerText
+	if not badge or not timerText then return end
+	if not badge.IsShown or not badge:IsShown() then
+		badge._huiTimerLastSec = nil
+		badge._huiTimerLastMs = nil
+		badge._huiTimerRunning = nil
+		timerText:Hide()
+		return
+	end
+
+	if UnitIsPVP and not UnitIsPVP("player") then
+		badge._huiTimerLastSec = nil
+		badge._huiTimerLastMs = nil
+		badge._huiTimerRunning = nil
+		timerText:Hide()
+		return
+	end
+
+	local ms = pvpTimerRemainingMs()
+	if not ms or ms <= 0 then
+		badge._huiTimerLastSec = nil
+		badge._huiTimerLastMs = nil
+		badge._huiTimerRunning = nil
+		timerText:Hide()
+		return
+	end
+
+	-- Only show during the last 5 minutes.
+	if ms >= 300000 then
+		badge._huiTimerLastSec = nil
+		badge._huiTimerLastMs = ms
+		badge._huiTimerRunning = nil
+		timerText:Hide()
+		return
+	end
+
+	-- Only show when we've observed the timer actually decreasing (some builds can return a stuck value).
+	local lastMs = badge._huiTimerLastMs
+	if lastMs then
+		if ms > lastMs + 500 then
+			-- Re-flagged / timer jumped up; wait to observe a decrease again.
+			badge._huiTimerRunning = nil
+		elseif ms < lastMs - 100 then
+			badge._huiTimerRunning = true
+		elseif badge._huiTimerRunning and ms > lastMs - 50 then
+			badge._huiTimerRunning = nil
+		end
+	end
+	badge._huiTimerLastMs = ms
+	if not badge._huiTimerRunning then
+		badge._huiTimerLastSec = nil
+		timerText:Hide()
+		return
+	end
+
+	local sec = math.floor((ms + 999) / 1000)
+	if sec ~= badge._huiTimerLastSec then
+		badge._huiTimerLastSec = sec
+		local m = math.floor(sec / 60)
+		local s = sec - (m * 60)
+		timerText:SetText(string.format("%d:%02d", m, s))
+	end
+	timerText:Show()
 end
 
 local function updatePetBars()
@@ -1184,10 +1331,10 @@ local function updateTargetBars()
 	-- normal: none
 	-- rare: desaturated
 	-- elite/rareelite/worldboss: saturated
-	if health._huiLevelBorder then
-		local classif = UnitClassification and UnitClassification("target") or "normal"
-		if classif == "normal" then
-			health._huiLevelBorder:Hide()
+		if health._huiLevelBorder then
+			local classif = UnitClassification and UnitClassification("target") or "normal"
+			if classif == "normal" then
+				health._huiLevelBorder:Hide()
 		else
 			health._huiLevelBorder:Show()
 			if classif == "rare" then
@@ -1200,13 +1347,15 @@ local function updateTargetBars()
 				-- Fallback: treat unknown classifications as "normal"
 				health._huiLevelBorder:Hide()
 			end
+			end
 		end
-	end
 
-	local curP = UnitPower("target")
-	local maxP = UnitPowerMax("target")
-	if not maxP or maxP <= 0 then
-		power:Hide()
+		updatePvPBadge(health, "target")
+
+		local curP = UnitPower("target")
+		local maxP = UnitPowerMax("target")
+		if not maxP or maxP <= 0 then
+			power:Hide()
 		else
 			power:Show()
 			power:SetMinMaxValues(0, math.max(1, maxP))
@@ -1887,17 +2036,23 @@ local function applyEnabled(db, enabled)
 	updateTargetAuraBar()
 	updateToTBars()
 
-	local ev = M._huiEventFrame
-	ev:UnregisterAllEvents()
-	ev:RegisterEvent("PLAYER_ENTERING_WORLD")
-	ev:RegisterEvent("START_AUTOREPEAT_SPELL")
-	ev:RegisterEvent("STOP_AUTOREPEAT_SPELL")
-	ev:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
+		local ev = M._huiEventFrame
+		ev:UnregisterAllEvents()
+			ev:RegisterEvent("PLAYER_ENTERING_WORLD")
+		ev:RegisterEvent("ZONE_CHANGED_NEW_AREA")
+		ev:RegisterEvent("ZONE_CHANGED")
+		ev:RegisterEvent("ZONE_CHANGED_INDOORS")
+		ev:RegisterEvent("PLAYER_FLAGS_CHANGED")
+		ev:RegisterEvent("UNIT_FACTION")
+		ev:RegisterEvent("START_AUTOREPEAT_SPELL")
+		ev:RegisterEvent("STOP_AUTOREPEAT_SPELL")
+		ev:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
 	ev:RegisterUnitEvent("UNIT_HEALTH_FREQUENT", "player", "pet")
 	ev:RegisterUnitEvent("UNIT_MAXHEALTH", "player", "pet")
 		ev:RegisterUnitEvent("UNIT_POWER_FREQUENT", "player", "pet")
 	ev:RegisterUnitEvent("UNIT_MAXPOWER", "player", "pet")
 	ev:RegisterUnitEvent("UNIT_DISPLAYPOWER", "player", "pet")
+	ev:RegisterUnitEvent("UNIT_FLAGS", "player", "target")
 	ev:RegisterEvent("UNIT_PET")
 	ev:RegisterUnitEvent("UNIT_SPELLCAST_START", "player")
 	ev:RegisterUnitEvent("UNIT_SPELLCAST_STOP", "player")
@@ -1965,11 +2120,26 @@ local function applyEnabled(db, enabled)
 				-- Combo points are player power but displayed on the target frame.
 				updateTargetBars()
 			end
-		if unit == "player" or event == "PLAYER_ENTERING_WORLD" then
-			updatePlayerBars()
-			updateCastOrTimers()
-			updateAuraBar()
-		end
+			if unit == "player"
+				or event == "PLAYER_ENTERING_WORLD"
+				or event == "ZONE_CHANGED_NEW_AREA"
+				or event == "ZONE_CHANGED"
+				or event == "ZONE_CHANGED_INDOORS"
+			then
+				updatePlayerBars()
+				updateCastOrTimers()
+				updateAuraBar()
+			end
+			if event == "PLAYER_FLAGS_CHANGED" and (not unit or unit == "player") then
+				updatePlayerBars()
+			end
+			if event == "UNIT_FLAGS" and unit == "player" then
+				updatePlayerBars()
+			end
+			if event == "UNIT_FACTION" then
+				if not unit or unit == "player" then updatePlayerBars() end
+				if unit == "target" then updateTargetBars() end
+			end
 		if event == "PLAYER_TARGET_CHANGED" or unit == "target" then
 			updateTargetBars()
 			updateTargetCastBar()
@@ -1992,11 +2162,17 @@ local function applyEnabled(db, enabled)
 			updateCastOrTimers()
 		end
 	end)
-	ev:SetScript("OnUpdate", function()
-		updateCastOrTimers()
-		updateTargetCastBar()
-	end)
-end
+			ev._huiPvPPoll = nil
+			ev:SetScript("OnUpdate", function(_, elapsed)
+				updateCastOrTimers()
+				updateTargetCastBar()
+				ev._huiPvPPoll = (ev._huiPvPPoll or 0) + (elapsed or 0)
+				if ev._huiPvPPoll >= 0.2 then
+					ev._huiPvPPoll = 0
+					updatePlayerPvPRunoutTimer()
+				end
+			end)
+	end
 
 function M:Apply(db)
 	db = db or HUI:GetDB()

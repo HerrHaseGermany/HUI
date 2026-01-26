@@ -84,6 +84,69 @@ local function safeSetWidth(f, w)
 	f:SetWidth(math.max(0, w or 0))
 end
 
+local function medianLast10(values, tmp)
+	local n = values and #values or 0
+	if n <= 0 then return 0 end
+	tmp = tmp or {}
+	for i = 1, n do
+		tmp[i] = values[i]
+	end
+	for i = n + 1, #tmp do
+		tmp[i] = nil
+	end
+	table.sort(tmp)
+	local mid = math.floor((n + 1) / 2)
+	if (n % 2) == 1 then
+		return tmp[mid] or 0
+	end
+	local a = tmp[mid] or 0
+	local b = tmp[mid + 1] or 0
+	return math.floor((a + b) / 2)
+end
+
+local function formatGrindEstimate(killMedianXP, remainingXP, sampleCount)
+	if killMedianXP and killMedianXP > 0 and remainingXP and remainingXP > 0 then
+		local mobs = math.ceil(remainingXP / killMedianXP)
+		return string.format("Grind: %d mobs @ %dxp", mobs, killMedianXP)
+	end
+	if remainingXP and remainingXP > 0 then
+		return string.format("Start grind for data", sampleCount or 0)
+	end
+	return ""
+end
+
+local function escapeLuaPattern(s)
+	return (s:gsub("([%(%)%.%%%+%-%*%?%[%]%^%$])", "%%%1"))
+end
+
+local function buildPatternsFromGlobal(fmt)
+	if type(fmt) ~= "string" or fmt == "" then return nil end
+	local p = escapeLuaPattern(fmt)
+	p = p:gsub("%%%%d", "(%%d+)")
+	p = p:gsub("%%%%s", ".+")
+	p = p:gsub("%%%%%.%d?f", "%%d+%.?%%d*")
+	return "^" .. p .. "$"
+end
+
+function M:_EnsureXPGainPatterns()
+	if M._xpGainPatterns then return end
+	local candidates = {
+		_G.COMBATLOG_XPGAIN_FIRSTPERSON,
+		_G.COMBATLOG_XPGAIN_FIRSTPERSON_UNNAMED,
+		_G.COMBATLOG_XPGAIN_FIRSTPERSON_GROUP,
+		_G.COMBATLOG_XPGAIN_FIRSTPERSON_RAID,
+		_G.COMBATLOG_XPGAIN_FIRSTPERSON_RAID_UNNAMED,
+	}
+	local pats = {}
+	for _, fmt in ipairs(candidates) do
+		local pat = buildPatternsFromGlobal(fmt)
+		if pat then
+			pats[#pats + 1] = pat
+		end
+	end
+	M._xpGainPatterns = pats
+end
+
 local function ensure()
 	if M._f then return end
 
@@ -274,9 +337,10 @@ function M:Update()
 	if f._infoBar then f._infoBar:Show() end
 
 	-- Keep "played this level" ticking even when TIME_PLAYED_MSG isn't firing.
-	if f._infoBar and f._infoBar._leftText and M._playedLevelSeconds and M._playedLevelBaseTime then
+	local playedSeconds = 0
+	if M._playedLevelSeconds and M._playedLevelBaseTime then
 		local elapsed = (GetTime and GetTime() or 0) - (M._playedLevelBaseTime or 0)
-		f._infoBar._leftText:SetText(formatHMS((M._playedLevelSeconds or 0) + elapsed))
+		playedSeconds = (M._playedLevelSeconds or 0) + elapsed
 	end
 
 	curXP = clamp(curXP, 0, maxXP)
@@ -344,6 +408,10 @@ function M:Update()
 	end
 
 	local info = f._infoBar
+	if info and info._leftText then
+		info._leftText:SetText(formatHMS(playedSeconds))
+	end
+
 	if info and info._midText then
 		local pctXP = (curXP / maxXP) * 100
 		local pctDone = (doneXP / maxXP) * 100
@@ -356,10 +424,20 @@ function M:Update()
 		local cLog = colorToHex(COLOR_QUEST_LOG)
 		local cRest = colorToHex(COLOR_RESTED)
 
-		info._midText:SetText(string.format(
+		local mid = string.format(
 			"|cff%sXP %.1f%%|r  |cff%sDone %.1f%%|r  |cff%sLog %.1f%%|r  |cff%sRest %.1f%%|r  (%.1f%%)",
 			cXP, pctXP, cDone, pctDone, cLog, pctLog, cRest, pctRest, pctTotal
-		))
+		)
+
+		local remainingXP = maxXP - curXP
+		if not M._killXPTmp then M._killXPTmp = {} end
+		local n = M._killXP and #M._killXP or 0
+		local med = medianLast10(M._killXP, M._killXPTmp)
+		local grind = formatGrindEstimate(med, remainingXP, n)
+		if grind and grind ~= "" then
+			mid = mid .. "  |  " .. grind
+		end
+		info._midText:SetText(mid)
 	end
 
 	if info and info._rightText then
@@ -379,6 +457,48 @@ function M:Update()
 	if f._text then f._text:SetText("") end
 end
 
+function M:AddKillXP(xp)
+	if not xp or xp <= 0 then return end
+	local t = M._killXP
+	if not t then
+		t = {}
+		M._killXP = t
+	end
+	local n = #t
+	if n < 10 then
+		t[n + 1] = xp
+	else
+		for i = 1, 9 do
+			t[i] = t[i + 1]
+		end
+		t[10] = xp
+	end
+end
+
+function M:ParseKillXPFromMessage(msg)
+	if type(msg) ~= "string" or msg == "" then return 0 end
+
+	M:_EnsureXPGainPatterns()
+	local patterns = M._xpGainPatterns
+	if patterns then
+		for i = 1, #patterns do
+			local a, b, c = msg:match(patterns[i])
+			if a then
+				local xp = tonumber(a) or 0
+				if b then xp = xp + (tonumber(b) or 0) end
+				if c then xp = xp + (tonumber(c) or 0) end
+				return xp
+			end
+		end
+	end
+
+	local a, b = msg:match("(%d+).-%+(%d+)")
+	if a and b then
+		return (tonumber(a) or 0) + (tonumber(b) or 0)
+	end
+	return tonumber(msg:match("(%d+)")) or 0
+end
+
 function M:Apply()
 	ensure()
 	if not M._ev then
@@ -389,10 +509,23 @@ function M:Apply()
 		ev:RegisterEvent("UPDATE_EXHAUSTION")
 		ev:RegisterEvent("PLAYER_LEVEL_UP")
 		ev:RegisterEvent("TIME_PLAYED_MSG")
+		ev:RegisterEvent("CHAT_MSG_COMBAT_XP_GAIN")
+		ev:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
 		ev:RegisterEvent("QUEST_LOG_UPDATE")
 		ev:RegisterEvent("QUEST_ACCEPTED")
 		ev:RegisterEvent("QUEST_TURNED_IN")
 		ev:SetScript("OnEvent", function(_, event, ...)
+			if event == "COMBAT_LOG_EVENT_UNFILTERED" then
+				if not CombatLogGetCurrentEventInfo then return end
+				local _, subevent = CombatLogGetCurrentEventInfo()
+				if subevent == "PARTY_KILL" then
+					M._pendingKillXP = true
+					M._pendingKillXPBase = UnitXP("player") or 0
+					M._pendingKillXPMax = UnitXPMax("player") or 0
+				end
+				return
+			end
+
 			if event == "TIME_PLAYED_MSG" then
 				local _, levelTime = ...
 				M._playedLevelSeconds = levelTime or 0
@@ -400,12 +533,37 @@ function M:Apply()
 			elseif event == "PLAYER_ENTERING_WORLD" or event == "PLAYER_LEVEL_UP" then
 				M._playedLevelSeconds = 0
 				M._playedLevelBaseTime = GetTime and GetTime() or 0
+				M._killXP = nil
+				M._xpGainPatterns = nil
+				M:_EnsureXPGainPatterns()
+				M._pendingKillXP = nil
+				M._pendingKillXPBase = nil
+				M._pendingKillXPMax = nil
 				-- Slight delay tends to make TIME_PLAYED_MSG more reliable on Classic.
 				if C_Timer and C_Timer.NewTimer and RequestTimePlayed then
 					C_Timer.NewTimer(0.5, function() RequestTimePlayed() end)
 				elseif RequestTimePlayed then
 					RequestTimePlayed()
 				end
+			elseif event == "PLAYER_XP_UPDATE" then
+				if M._pendingKillXP then
+					local base = M._pendingKillXPBase or 0
+					local baseMax = M._pendingKillXPMax or 0
+					local now = UnitXP("player") or 0
+					local gain = now - base
+					if gain < 0 and baseMax > 0 then
+						gain = now + (baseMax - base)
+					end
+					if gain > 0 then
+						M:AddKillXP(gain)
+					end
+					M._pendingKillXP = nil
+					M._pendingKillXPBase = nil
+					M._pendingKillXPMax = nil
+				end
+			elseif event == "CHAT_MSG_COMBAT_XP_GAIN" then
+				local msg = ...
+				M:AddKillXP(M:ParseKillXPFromMessage(msg))
 			end
 			M:Update()
 		end)

@@ -10,7 +10,10 @@ src\core.lua
 src\actionbars.lua
 src\xpbar.lua
 src\micromenu.lua
+src\minimap.lua
+src\minimapbuttons.lua
 src\tooltip.lua
+src\flighttimer.lua
 src\mirrortimers.lua
 src\errors.lua
 src\nameplates.lua

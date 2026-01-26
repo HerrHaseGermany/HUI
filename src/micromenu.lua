@@ -254,7 +254,7 @@ local function apply(cfg)
 	local scale = cfg.scale or 0.95
 	holder:SetScale(scale)
 	holder:ClearAllPoints()
-	holder:SetPoint("RIGHT", UIParent, "RIGHT", 0, -200)
+	holder:SetPoint("BOTTOMRIGHT", UIParent, "BOTTOMRIGHT", 0, 100)
 
 	local gap = 0
 	local bw, bh = BUTTON_W, BUTTON_H

@@ -5,7 +5,7 @@ table.insert(HUI.modules, M)
 
 -- Hardcoded tooltip position (spells + units)
 local POINT, RELPOINT = "BOTTOMRIGHT", "BOTTOMRIGHT"
-local X, Y = -15, 150
+local X, Y = -30, 200
 
 local function apply()
 	if not GameTooltip or not GameTooltip.SetOwner or not hooksecurefunc then return end
