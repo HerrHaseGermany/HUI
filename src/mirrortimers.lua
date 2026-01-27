@@ -6,7 +6,7 @@ table.insert(HUI.modules, M)
 
 -- Hardcoded layout
 local POINT, RELPOINT = "CENTER", "CENTER"
-local X, Y = 0, 120
+local X, Y = 0, 160
 local BAR_W, BAR_H = 300, 20
 local GAP_Y = 2
 local FONT_SIZE = 12

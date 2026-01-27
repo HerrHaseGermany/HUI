@@ -22,7 +22,7 @@ local function ensureHolder()
 	if holder then return holder end
 	holder = CreateFrame("Frame", "HUI_MinimapHolder", UIParent, "BackdropTemplate")
 	holder:SetSize(MINIMAP_SIZE + (BORDER_SIZE * 2), MINIMAP_SIZE + (BORDER_SIZE * 2))
-	holder:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT", 0, 31)
+	holder:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT", -5, 26)
 	holder:SetBackdrop({ edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = BORDER_SIZE })
 	holder:SetBackdropBorderColor(0, 0, 0, 1)
 	holder:SetBackdropColor(0, 0, 0, 0)
@@ -148,6 +148,61 @@ local function applyOnce()
 	end
 end
 
+local function dockIndicator(frame, parent, point, relTo, relPoint, x, y, scale)
+	if not frame then return end
+	local wasShown = frame.IsShown and frame:IsShown()
+	parent = parent or UIParent
+	relTo = relTo or parent
+	-- Guard against bad anchor strings (some frames override SetPoint erroring hard).
+	relPoint = relPoint or point
+	if frame.SetParent then frame:SetParent(parent) end
+	if frame.SetFrameStrata then frame:SetFrameStrata("HIGH") end
+	if frame.SetFrameLevel and relTo.GetFrameLevel then
+		frame:SetFrameLevel((relTo:GetFrameLevel() or 0) + 80)
+	end
+	if frame.ClearAllPoints then frame:ClearAllPoints() end
+	if frame.SetPoint then
+		pcall(frame.SetPoint, frame, point, relTo, relPoint, x or 0, y or 0)
+	end
+	if frame.SetScale and scale then frame:SetScale(scale) end
+	-- Don't force-show indicators; otherwise you get empty/placeholder buttons.
+	if wasShown and frame.SetAlpha then frame:SetAlpha(1) end
+	if wasShown and frame.Show then frame:Show() end
+end
+
+local function dockMinimapIndicators(holderFrame)
+	-- Stack common minimap indicators on the left side of the frame.
+	local function firstAvailable(...)
+		for i = 1, select("#", ...) do
+			local f = select(i, ...)
+			if f then return f end
+		end
+		return nil
+	end
+
+	-- Only pick one per "type" to avoid duplicates/empty shells on some clients.
+	local stack = {
+		firstAvailable(_G.MiniMapMailFrame), -- mail
+		firstAvailable(_G.QueueStatusMinimapButton, _G.LFGMinimapFrame), -- queue/LFG
+		firstAvailable(_G.MiniMapTrackingButton, _G.MiniMapTracking, _G.MiniMapTrackingFrame), -- tracking
+	}
+
+	local y = -6
+	local gap = 2
+	for i = 1, #stack do
+		local f = stack[i]
+		if f then
+			-- Put the button's CENTER on the holder edge.
+			dockIndicator(f, holderFrame, "CENTER", holderFrame, "LEFT", 0, y, 0.9)
+			-- Approximate vertical stacking; many of these are ~20px tall.
+			y = y - ((f.GetHeight and f:GetHeight()) or 20) - gap
+		end
+	end
+
+	-- Durability/repair indicator: move it down ~60px so it doesn't sit on the minimap center.
+	dockIndicator(_G.DurabilityFrame, holderFrame, "TOPLEFT", holderFrame, "TOPLEFT", -200, -50, 1)
+end
+
 function M:Apply(db)
 	if db and db.enable and db.enable.minimap == false then return end
 
@@ -162,6 +217,8 @@ function M:Apply(db)
 	if Minimap.SetMaskTexture then
 		Minimap:SetMaskTexture("Interface\\ChatFrame\\ChatFrameBackground")
 	end
+
+	dockMinimapIndicators(h)
 
 	local clock = ensureClock()
 	if clock then

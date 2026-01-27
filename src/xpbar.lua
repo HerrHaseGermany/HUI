@@ -73,6 +73,17 @@ local function formatHMS(seconds)
 	return string.format("%ds", s)
 end
 
+local function shortNumber(n)
+	n = tonumber(n) or 0
+	if n >= 1e6 then
+		return string.format("%.1fm", n / 1e6):gsub("%.0m", "m")
+	end
+	if n >= 1e3 then
+		return string.format("%.1fk", n / 1e3):gsub("%.0k", "k")
+	end
+	return tostring(math.floor(n + 0.5))
+end
+
 local function clamp(v, minV, maxV)
 	if v < minV then return minV end
 	if v > maxV then return maxV end
@@ -262,6 +273,14 @@ local function ensure()
 	M._f = f
 end
 
+local function requestTimePlayedThrottled()
+	if not RequestTimePlayed then return end
+	local now = GetTime and GetTime() or 0
+	if M._lastPlayedRequest and (now - M._lastPlayedRequest) < 5 then return end
+	M._lastPlayedRequest = now
+	RequestTimePlayed()
+end
+
 local function sumQuestXP()
 	if not GetNumQuestLogEntries_ or not GetQuestLogTitle or not GetQuestLogRewardXP then
 		return 0, 0
@@ -412,7 +431,7 @@ function M:Update()
 		info._leftText:SetText(formatHMS(playedSeconds))
 	end
 
-	if info and info._midText then
+		if info and info._midText then
 		local pctXP = (curXP / maxXP) * 100
 		local pctDone = (doneXP / maxXP) * 100
 		local pctLog = (logXP / maxXP) * 100
@@ -437,8 +456,8 @@ function M:Update()
 		if grind and grind ~= "" then
 			mid = mid .. "  |  " .. grind
 		end
-		info._midText:SetText(mid)
-	end
+			info._midText:SetText(mid)
+		end
 
 	if info and info._rightText then
 		local fps = (GetFramerate and GetFramerate()) or 0
@@ -454,8 +473,11 @@ function M:Update()
 		info._rightText:SetText(string.format("|cff%s%.0f|r fps  |cff%s%d|r ms", fpsHex, fps, latHex, lat))
 	end
 
-	if f._text then f._text:SetText("") end
-end
+		-- Center text on the bottom bar: current / max XP (full numbers).
+		if f._text then
+			f._text:SetText(string.format("%d / %d", curXP or 0, maxXP or 0))
+		end
+	end
 
 function M:AddKillXP(xp)
 	if not xp or xp <= 0 then return end
@@ -514,7 +536,7 @@ function M:Apply()
 		ev:RegisterEvent("QUEST_LOG_UPDATE")
 		ev:RegisterEvent("QUEST_ACCEPTED")
 		ev:RegisterEvent("QUEST_TURNED_IN")
-		ev:SetScript("OnEvent", function(_, event, ...)
+			ev:SetScript("OnEvent", function(_, event, ...)
 			if event == "COMBAT_LOG_EVENT_UNFILTERED" then
 				if not CombatLogGetCurrentEventInfo then return end
 				local _, subevent = CombatLogGetCurrentEventInfo()
@@ -530,7 +552,7 @@ function M:Apply()
 				local _, levelTime = ...
 				M._playedLevelSeconds = levelTime or 0
 				M._playedLevelBaseTime = GetTime and GetTime() or 0
-			elseif event == "PLAYER_ENTERING_WORLD" or event == "PLAYER_LEVEL_UP" then
+				elseif event == "PLAYER_ENTERING_WORLD" or event == "PLAYER_LEVEL_UP" then
 				M._playedLevelSeconds = 0
 				M._playedLevelBaseTime = GetTime and GetTime() or 0
 				M._killXP = nil
@@ -539,13 +561,13 @@ function M:Apply()
 				M._pendingKillXP = nil
 				M._pendingKillXPBase = nil
 				M._pendingKillXPMax = nil
-				-- Slight delay tends to make TIME_PLAYED_MSG more reliable on Classic.
-				if C_Timer and C_Timer.NewTimer and RequestTimePlayed then
-					C_Timer.NewTimer(0.5, function() RequestTimePlayed() end)
-				elseif RequestTimePlayed then
-					RequestTimePlayed()
-				end
-			elseif event == "PLAYER_XP_UPDATE" then
+					-- Slight delay tends to make TIME_PLAYED_MSG more reliable on Classic.
+					if C_Timer and C_Timer.NewTimer then
+						C_Timer.NewTimer(0.5, requestTimePlayedThrottled)
+					else
+						requestTimePlayedThrottled()
+					end
+				elseif event == "PLAYER_XP_UPDATE" then
 				if M._pendingKillXP then
 					local base = M._pendingKillXPBase or 0
 					local baseMax = M._pendingKillXPMax or 0
@@ -566,13 +588,13 @@ function M:Apply()
 				M:AddKillXP(M:ParseKillXPFromMessage(msg))
 			end
 			M:Update()
-		end)
-	end
+			end)
+		end
 	if not M._ticker and C_Timer and C_Timer.NewTicker then
 		M._ticker = C_Timer.NewTicker(0.25, function()
 			if M.Update then M:Update() end
 		end)
 	end
-	if RequestTimePlayed then RequestTimePlayed() end
+	requestTimePlayedThrottled()
 	M:Update()
 end

@@ -171,6 +171,8 @@ local function setShown(frame, shown)
 	end
 end
 
+local forceHide
+
 local function hideBlizzardAurasAndCastbar()
 	-- Buffs/Debuffs
 	if _G.BuffFrame then _G.BuffFrame:Hide() end
@@ -194,7 +196,14 @@ local function hideBlizzardAurasAndCastbar()
 	end
 end
 
-local function forceHide(frame)
+local function hideBlizzardTargetFrames()
+	-- Target frames can be recreated/shown by Blizzard code; keep forcing hidden.
+	forceHide(_G.TargetFrame)
+	forceHide(_G.TargetFrameToT)
+	forceHide(_G.ComboPointPlayerFrame)
+end
+
+forceHide = function(frame)
 	if not frame or not frame.Hide then return end
 	frame:Hide()
 	-- Keep Blizzard code intact but prevent it from showing again.
@@ -341,9 +350,8 @@ local function createAuraButton(parent)
 	if cd.SetHideCountdownNumbers then cd:SetHideCountdownNumbers(true) end
 	-- Common addon convention (OmniCC) to disable center countdown text.
 	cd.noCooldownCount = true
-	-- Swipe without the dark "shadow": keep swipe enabled but tint it.
-	if cd.SetDrawSwipe then cd:SetDrawSwipe(true) end
-	if cd.SetSwipeColor then cd:SetSwipeColor(1, 1, 1, 0.2) end
+	-- No dark swipe overlay on icons (Classic clients can ignore SetSwipeColor).
+	if cd.SetDrawSwipe then cd:SetDrawSwipe(false) end
 	if cd.SetDrawEdge then cd:SetDrawEdge(true) end
 	if cd.SetDrawBling then cd:SetDrawBling(true) end
 	b._huiCooldown = cd
@@ -365,6 +373,8 @@ local function createAuraButton(parent)
 	b:Hide()
 	return b
 end
+
+local updateAuraBar
 
 local function ensureAuraBar()
 	if M._huiAuraBar then return end
@@ -405,11 +415,24 @@ local function ensureAuraBar()
 				if btn._huiTime then btn._huiTime:SetText("") end
 				return
 			end
-			local remain = exp - now
-			if remain <= 0 then
-				if btn._huiTime then btn._huiTime:SetText("") end
-				return
-			end
+				local remain = exp - now
+				if remain <= 0 then
+					if btn._huiTime then btn._huiTime:SetText("") end
+					btn:Hide()
+					if not self._huiExpireRefreshPending then
+						self._huiExpireRefreshPending = true
+						if C_Timer and C_Timer.After then
+							C_Timer.After(0, function()
+								self._huiExpireRefreshPending = false
+								updateAuraBar()
+							end)
+						else
+							self._huiExpireRefreshPending = false
+							updateAuraBar()
+						end
+					end
+					return
+				end
 			if remain >= 60 then
 				if btn._huiTime then btn._huiTime:SetText(string.format("%d", math.floor(remain / 60))) end
 			else
@@ -464,8 +487,8 @@ local function createTargetAuraButton(parent)
 	cd:SetAllPoints(b)
 	if cd.SetHideCountdownNumbers then cd:SetHideCountdownNumbers(true) end
 	cd.noCooldownCount = true
-	if cd.SetDrawSwipe then cd:SetDrawSwipe(true) end
-	if cd.SetSwipeColor then cd:SetSwipeColor(1, 1, 1, 0.35) end
+	-- No dark swipe overlay on icons.
+	if cd.SetDrawSwipe then cd:SetDrawSwipe(false) end
 	if cd.SetDrawEdge then cd:SetDrawEdge(false) end
 	if cd.SetDrawBling then cd:SetDrawBling(false) end
 	b._huiCooldown = cd
@@ -487,6 +510,8 @@ local function createTargetAuraButton(parent)
 	b:Hide()
 	return b
 end
+
+local updateTargetAuraBar
 
 local function ensureTargetAuraBar()
 	if M._huiTargetAuraBar then return end
@@ -520,11 +545,24 @@ local function ensureTargetAuraBar()
 				if btn._huiTime then btn._huiTime:SetText("") end
 				return
 			end
-			local remain = exp - now
-			if remain <= 0 then
-				if btn._huiTime then btn._huiTime:SetText("") end
-				return
-			end
+				local remain = exp - now
+				if remain <= 0 then
+					if btn._huiTime then btn._huiTime:SetText("") end
+					btn:Hide()
+					if not self._huiExpireRefreshPending then
+						self._huiExpireRefreshPending = true
+						if C_Timer and C_Timer.After then
+							C_Timer.After(0, function()
+								self._huiExpireRefreshPending = false
+								updateTargetAuraBar()
+							end)
+						else
+							self._huiExpireRefreshPending = false
+							updateTargetAuraBar()
+						end
+					end
+					return
+				end
 			if remain >= 60 then
 				if btn._huiTime then btn._huiTime:SetText(string.format("%d", math.floor(remain / 60))) end
 			else
@@ -830,7 +868,7 @@ local function ensureFrames()
 	M._huiTargetCombo = cpHolder
 
 	local CP_COUNT = 5
-	local CP_SIZE = 18
+	local CP_SIZE = 26
 	local CP_GAP = 2
 	local CP_SHOW_ORDER = { 3, 2, 4, 1, 5 } -- grow from center outward
 	cpHolder._points = {}
@@ -1629,47 +1667,59 @@ local function updateCastOrTimers()
 	updateSwingTimers()
 end
 
-local function updateAuraBar()
+updateAuraBar = function()
 	ensureAuraBar()
 	local bar = M._huiAuraBar
 	if not bar then return end
 
 	hideBlizzardWeaponEnchants()
 
-		-- Collect auras.
-		local weaponBuffs = {}
-		local myBuffs = {}
-		local otherBuffs = {}
-		local debuffs = {}
+	-- Suppress recently canceled auras for a short time so they disappear instantly
+	-- even if the server/UI state update lags.
+	if not M._huiAuraSuppress then M._huiAuraSuppress = {} end
+	local nowT = GetTime and GetTime() or 0
 
-	local function addAura(list, filter, index, name, icon, count, duration, expirationTime, isStealable)
-		list[#list + 1] = {
-			filter = filter,
-			index = index,
-			name = name,
-			icon = icon,
-			count = count,
-			duration = duration,
-			expirationTime = expirationTime,
-			isStealable = isStealable,
-		}
-	end
+			-- Collect auras.
+			local weaponBuffs = {}
+			local myBuffs = {}
+			local otherBuffs = {}
+			local debuffs = {}
 
-	for i = 1, 40 do
-		local name, icon, count, debuffType, duration, expirationTime, caster, isStealable = UnitAura("player", i, "HELPFUL")
-		if not name then break end
-		if caster == "player" then
-			addAura(myBuffs, "HELPFUL", i, name, icon, count, duration, expirationTime, isStealable)
-		else
-			addAura(otherBuffs, "HELPFUL", i, name, icon, count, duration, expirationTime, isStealable)
+		local function addAura(list, filter, index, name, icon, count, duration, expirationTime, isStealable, spellId)
+			local key = spellId or name
+			local untilT = key and M._huiAuraSuppress[key]
+			if untilT and untilT > nowT then
+				return
+			end
+			list[#list + 1] = {
+				filter = filter,
+				index = index,
+				name = name,
+				icon = icon,
+				count = count,
+				duration = duration,
+				expirationTime = expirationTime,
+				isStealable = isStealable,
+			}
 		end
-	end
 
-	for i = 1, 40 do
-		local name, icon, count, debuffType, duration, expirationTime, caster, isStealable = UnitAura("player", i, "HARMFUL")
-		if not name then break end
-		addAura(debuffs, "HARMFUL", i, name, icon, count, duration, expirationTime, isStealable)
-	end
+		for i = 1, 40 do
+			local name, icon, count, debuffType, duration, expirationTime, caster, isStealable, _, spellId = UnitAura("player", i, "HELPFUL")
+			if name then
+				if caster == "player" then
+					addAura(myBuffs, "HELPFUL", i, name, icon, count, duration, expirationTime, isStealable, spellId)
+				else
+					addAura(otherBuffs, "HELPFUL", i, name, icon, count, duration, expirationTime, isStealable, spellId)
+				end
+			end
+		end
+
+		for i = 1, 40 do
+			local name, icon, count, debuffType, duration, expirationTime, caster, isStealable, _, spellId = UnitAura("player", i, "HARMFUL")
+			if name then
+				addAura(debuffs, "HARMFUL", i, name, icon, count, duration, expirationTime, isStealable, spellId)
+			end
+		end
 
 		-- Weapon enchants (main/offhand) count as "my buffs" and should not show on Blizzard frames.
 		do
@@ -1726,8 +1776,8 @@ local function updateAuraBar()
 	-- Place icons by CENTER relative to the bar center so a single aura is truly centered.
 	local x = -totalWidth / 2 + (AURA_SIZE / 2)
 
-	local function applyButton(btn, aura, unit)
-		btn:SetSize(AURA_SIZE, AURA_SIZE)
+		local function applyButton(btn, aura, unit)
+			btn:SetSize(AURA_SIZE, AURA_SIZE)
 		btn._huiExpiration = aura.expirationTime
 		btn._huiDuration = aura.duration
 		btn._huiAuraIndex = aura.index
@@ -1747,8 +1797,8 @@ local function updateAuraBar()
 			btn._huiCooldown:Clear()
 		end
 
-		-- Weapon enchants are not real UnitAuras; handle tooltip/cancel separately.
-		if aura.type == "weapon" then
+			-- Weapon enchants are not real UnitAuras; handle tooltip/cancel separately.
+			if aura.type == "weapon" then
 			btn:SetScript("OnEnter", function(self)
 				GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
 				local slot = (aura.slot == 1) and 16 or 17
@@ -1760,14 +1810,21 @@ local function updateAuraBar()
 			btn:SetScript("OnLeave", function()
 				if GameTooltip and GameTooltip.Hide then GameTooltip:Hide() end
 			end)
-			btn:SetScript("OnClick", function(_, button)
-				if button ~= "RightButton" then return end
-				if CancelItemTempEnchantment then
-					CancelItemTempEnchantment(aura.slot)
-				end
-			end)
-			btn:EnableMouse(true)
-		else
+				btn:SetScript("OnClick", function(_, button)
+					if button ~= "RightButton" then return end
+					if CancelItemTempEnchantment then
+						CancelItemTempEnchantment(aura.slot)
+					end
+					-- Hide immediately; the UNIT_AURA update can lag slightly.
+					if btn.Hide then btn:Hide() end
+					if C_Timer and C_Timer.After then
+						C_Timer.After(0, updateAuraBar)
+					else
+						updateAuraBar()
+					end
+				end)
+				btn:EnableMouse(true)
+			else
 			-- Tooltip
 			btn:SetScript("OnEnter", function(self)
 				GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
@@ -1778,8 +1835,8 @@ local function updateAuraBar()
 				if GameTooltip and GameTooltip.Hide then GameTooltip:Hide() end
 			end)
 
-			-- Cancel on RIGHT click for buffs (Blizzard-style).
-			if aura.filter == "HELPFUL" then
+				-- Cancel on RIGHT click for buffs (Blizzard-style).
+				if aura.filter == "HELPFUL" then
 				if InCombatLockdown and InCombatLockdown() then
 					-- Do not change attributes in combat.
 				else
@@ -1787,9 +1844,35 @@ local function updateAuraBar()
 					btn:SetAttribute("*type2", "cancelaura")
 					btn:SetAttribute("unit", unit)
 					btn:SetAttribute("index", aura.index)
-				end
-				btn:EnableMouse(true)
-			else
+					end
+					btn:EnableMouse(true)
+
+						-- Make cancels feel instant: hide on PostClick and refresh auras next frame.
+						if not btn._huiCancelHooked and btn.HookScript then
+							btn._huiCancelHooked = true
+							btn:HookScript("PreClick", function(self, mouseButton)
+								if mouseButton ~= "RightButton" then return end
+								if not (self._huiAuraIndex and self._huiAuraFilter) then return end
+								local n, _, _, _, _, _, _, _, _, spellId = UnitAura("player", self._huiAuraIndex, self._huiAuraFilter)
+								self._huiCancelKey = spellId or n
+							end)
+							btn:HookScript("PostClick", function(self, mouseButton)
+								if mouseButton ~= "RightButton" then return end
+								if self._huiCancelKey then
+									if not M._huiAuraSuppress then M._huiAuraSuppress = {} end
+									local t = GetTime and GetTime() or 0
+									M._huiAuraSuppress[self._huiCancelKey] = t + 0.75
+									self._huiCancelKey = nil
+								end
+								if self.Hide then self:Hide() end
+								if C_Timer and C_Timer.After then
+									C_Timer.After(0, updateAuraBar)
+								else
+									updateAuraBar()
+							end
+						end)
+					end
+				else
 				-- Debuffs not cancelable.
 				if InCombatLockdown and InCombatLockdown() then
 					-- no-op
@@ -1872,7 +1955,7 @@ local function updateAuraBar()
 	end
 end
 
-local function updateTargetAuraBar()
+updateTargetAuraBar = function()
 	ensureTargetAuraBar()
 	local bar = M._huiTargetAuraBar
 	local targetFrame = M._huiTarget
@@ -1909,21 +1992,23 @@ local function updateTargetAuraBar()
 		}
 	end
 
-	for i = 1, 40 do
-		local name, icon, count, _, duration, expirationTime, caster = UnitAura("target", i, "HARMFUL")
-		if not name then break end
-		if caster == "player" then
-			addAura(myDebuffs, "HARMFUL", i, name, icon, count, duration, expirationTime, caster)
-		else
-			addAura(otherDebuffs, "HARMFUL", i, name, icon, count, duration, expirationTime, caster)
+		for i = 1, 40 do
+			local name, icon, count, _, duration, expirationTime, caster = UnitAura("target", i, "HARMFUL")
+			if name then
+				if caster == "player" then
+					addAura(myDebuffs, "HARMFUL", i, name, icon, count, duration, expirationTime, caster)
+				else
+					addAura(otherDebuffs, "HARMFUL", i, name, icon, count, duration, expirationTime, caster)
+				end
+			end
 		end
-	end
 
-	for i = 1, 40 do
-		local name, icon, count, _, duration, expirationTime, caster = UnitAura("target", i, "HELPFUL")
-		if not name then break end
-		addAura(buffs, "HELPFUL", i, name, icon, count, duration, expirationTime, caster)
-	end
+		for i = 1, 40 do
+			local name, icon, count, _, duration, expirationTime, caster = UnitAura("target", i, "HELPFUL")
+			if name then
+				addAura(buffs, "HELPFUL", i, name, icon, count, duration, expirationTime, caster)
+			end
+		end
 
 	local totalDebuffs = #myDebuffs + #otherDebuffs
 	local hasDebuffs = totalDebuffs > 0
@@ -2080,9 +2165,9 @@ local function applyEnabled(db, enabled)
 	ev:RegisterUnitEvent("UNIT_SPELLCAST_DELAYED", "target")
 	ev:RegisterUnitEvent("UNIT_SPELLCAST_CHANNEL_START", "target")
 	ev:RegisterUnitEvent("UNIT_SPELLCAST_CHANNEL_UPDATE", "target")
-	ev:RegisterUnitEvent("UNIT_SPELLCAST_CHANNEL_STOP", "target")
-	ev:RegisterUnitEvent("UNIT_AURA", "target")
-	ev:RegisterEvent("UNIT_TARGET")
+			ev:RegisterUnitEvent("UNIT_SPELLCAST_CHANNEL_STOP", "target")
+			ev:RegisterUnitEvent("UNIT_AURA", "target")
+			ev:RegisterEvent("UNIT_TARGET")
 	ev:RegisterUnitEvent("UNIT_HEALTH_FREQUENT", "targettarget")
 	ev:RegisterUnitEvent("UNIT_MAXHEALTH", "targettarget")
 	ev:RegisterUnitEvent("UNIT_POWER_FREQUENT", "targettarget")
@@ -2090,10 +2175,10 @@ local function applyEnabled(db, enabled)
 	ev:RegisterUnitEvent("UNIT_DISPLAYPOWER", "targettarget")
 	ev:RegisterUnitEvent("UNIT_MODEL_CHANGED", "targettarget")
 
-		ev:SetScript("OnEvent", function(_, event, unit)
-		if event == "COMBAT_LOG_EVENT_UNFILTERED" then
-			local _, subEvent, _, srcGUID = CombatLogGetCurrentEventInfo()
-			if srcGUID == UnitGUID("player") and (subEvent == "SWING_DAMAGE" or subEvent == "SWING_MISSED") then
+			ev:SetScript("OnEvent", function(_, event, unit)
+			if event == "COMBAT_LOG_EVENT_UNFILTERED" then
+				local _, subEvent, _, srcGUID = CombatLogGetCurrentEventInfo()
+				if srcGUID == UnitGUID("player") and (subEvent == "SWING_DAMAGE" or subEvent == "SWING_MISSED") then
 				if not M._huiSwing then M._huiSwing = {} end
 				local st = M._huiSwing
 				local now = GetTime()
@@ -2106,12 +2191,31 @@ local function applyEnabled(db, enabled)
 					st.ohStart, st.ohEnd = nil, nil
 				end
 			end
-			return
-		end
-			if event == "UNIT_PET" then
-				if unit == "player" then updatePetBars() end
 				return
 			end
+			-- Auras can be in a transient state (especially right after cancel); defer one frame.
+			if event == "UNIT_AURA" then
+				if unit == "player" then
+					if C_Timer and C_Timer.After then
+						C_Timer.After(0, updateAuraBar)
+					else
+						updateAuraBar()
+					end
+					return
+				end
+				if unit == "target" then
+					if C_Timer and C_Timer.After then
+						C_Timer.After(0, updateTargetAuraBar)
+					else
+						updateTargetAuraBar()
+					end
+					return
+				end
+			end
+				if event == "UNIT_PET" then
+					if unit == "player" then updatePetBars() end
+					return
+				end
 			if event == "UNIT_INVENTORY_CHANGED" and unit == "player" then
 				updateAuraBar()
 				return
@@ -2162,17 +2266,24 @@ local function applyEnabled(db, enabled)
 			updateCastOrTimers()
 		end
 	end)
-			ev._huiPvPPoll = nil
-			ev:SetScript("OnUpdate", function(_, elapsed)
-				updateCastOrTimers()
-				updateTargetCastBar()
-				ev._huiPvPPoll = (ev._huiPvPPoll or 0) + (elapsed or 0)
-				if ev._huiPvPPoll >= 0.2 then
-					ev._huiPvPPoll = 0
-					updatePlayerPvPRunoutTimer()
-				end
-			end)
-	end
+				ev._huiPvPPoll = nil
+				ev:SetScript("OnUpdate", function(_, elapsed)
+					updateCastOrTimers()
+					updateTargetCastBar()
+					ev._huiPvPPoll = (ev._huiPvPPoll or 0) + (elapsed or 0)
+					if ev._huiPvPPoll >= 0.2 then
+						ev._huiPvPPoll = 0
+						updatePlayerPvPRunoutTimer()
+					end
+					-- In combat, UNIT_AURA can feel laggy/missed; poll auras lightly.
+					ev._huiAuraPoll = (ev._huiAuraPoll or 0) + (elapsed or 0)
+					if ev._huiAuraPoll >= 0.2 then
+						ev._huiAuraPoll = 0
+						updateAuraBar()
+						updateTargetAuraBar()
+					end
+				end)
+		end
 
 function M:Apply(db)
 	db = db or HUI:GetDB()
@@ -2187,9 +2298,16 @@ function M:Apply(db)
 	setShown(_G.TargetFrame, not useCustom)
 	setShown(_G.TargetFrameToT, not useCustom)
 	setShown(_G.FocusFrame, not useCustom)
-	forceHide(_G.TargetFrame)
-	forceHide(_G.TargetFrameToT)
+	hideBlizzardTargetFrames()
 	hideBlizzardAurasAndCastbar()
 
 	applyEnabled(db, useCustom)
+
+	-- Extra safety: keep Blizzard target frames hidden if something tries to show them later.
+	if not M._huiHideTargetTicker and C_Timer and C_Timer.NewTicker then
+		M._huiHideTargetTicker = C_Timer.NewTicker(1.0, function()
+			if InCombatLockdown and InCombatLockdown() then return end
+			hideBlizzardTargetFrames()
+		end)
+	end
 end

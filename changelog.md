@@ -1,9 +1,12 @@
 ## Changelog
 
-# TODO Nameplates
 # TODO MAP
 # TODO Actionbar Slot Organisation
 # TODO Group/Raid Frames
+# TODO fix Namepplate clickable area top full bar
+# TODO Resting indicator
+# TODO Threadmeter
+
 
 # 0.1.0
 

@@ -5,6 +5,7 @@ table.insert(HUI.modules, M)
 
 local PLATE_W, PLATE_H = 250, 30
 local COLOR_BORDER = { 0, 0, 0, 1 }
+local RESOURCE_H = 5
 local NAME_SIZE, SUB_SIZE = 18, 16
 local MIN_NAME_SIZE, MIN_SUB_SIZE = 10, 10
 local TEXT_MAX_W = PLATE_W - 120 -- leave room for level/hp
@@ -14,10 +15,14 @@ local LEVEL_FRAME_W, LEVEL_FRAME_H = 48, 48
 local LEVEL_FONT_SIZE = 18
 local PVP_BADGE_W, PVP_BADGE_H = 60, 60
 local PVP_BADGE_GAP = 42
-local QUEST_ICON_W, QUEST_ICON_H = 22, 22
+local QUEST_ICON_W, QUEST_ICON_H = 18, 18
 
 local QUEST_ICON_AVAILABLE = "Interface\\GossipFrame\\AvailableQuestIcon"
 local QUEST_ICON_ACTIVE = "Interface\\GossipFrame\\ActiveQuestIcon"
+local RAIDMARK_SIZE = 36
+local HP_FONT_SIZE = 18
+local HP_FONT_MIN = 12
+local HP_DIGITS_BASE = 3
 
 local function unitNameColor(unit)
 	-- Match Blizzard-style unit name coloring (class for players, reaction for NPCs).
@@ -32,6 +37,44 @@ local function unitNameColor(unit)
 		if c then return c.r, c.g, c.b end
 	end
 	return 1, 1, 1
+end
+
+local function powerColor(unit)
+	local powerType, powerToken = UnitPowerType(unit)
+	local c = PowerBarColor and PowerBarColor[powerToken or powerType]
+	if c then return c.r, c.g, c.b end
+	return 0.2, 0.4, 1.0
+end
+
+local function fitDigitsText(fs, text, baseDigits, baseSize, minSize)
+	if not fs or not fs.SetFont then return end
+	local s = tostring(text or "")
+	local n = #s
+	if n <= (baseDigits or 3) then
+		fs:SetFont(STANDARD_TEXT_FONT, baseSize, "THICKOUTLINE")
+		return
+	end
+	local scale = (baseDigits or 3) / n
+	local size = math.floor((baseSize or 12) * scale + 0.5)
+	if size < (minSize or 1) then size = minSize or 1 end
+	fs:SetFont(STANDARD_TEXT_FONT, size, "THICKOUTLINE")
+end
+
+local function formatHPText(hp)
+	hp = tonumber(hp) or 0
+	if hp >= 1000000 then
+		-- 7+ digits: show millions (XXM, XXXM, ...), rounded.
+		local m = math.floor((hp + 500000) / 1000000)
+		local ms = tostring(m)
+		return ms .. "M", (#ms + 1)
+	end
+	if hp >= 10000 then
+		-- 5-6 digits: show thousands (XXk, XXXk, ...), rounded.
+		local k = math.floor((hp + 500) / 1000)
+		local ks = tostring(k)
+		return ks .. "k", (#ks + 1)
+	end
+	return tostring(hp), HP_DIGITS_BASE
 end
 
 local function getNPCTitle(unit)
@@ -169,112 +212,46 @@ local function updatePvPBadge(uf, unit)
 	badge:Show()
 end
 
-local function updateRaidMark(uf, unit)
-	local tex = uf and uf._HUIRaidMark
-	if not tex or not unit or not UnitExists or not UnitExists(unit) then
-		if tex then tex:Hide() end
-		return
+local function findBlizzardRaidMark(plate, uf)
+	local frame = (uf and (uf.RaidTargetFrame or uf.raidTargetFrame)) or (plate and (plate.RaidTargetFrame or plate.raidTargetFrame))
+	if frame then
+		local tex = frame.RaidTargetIcon or frame.raidTargetIcon or frame.Icon or frame.icon
+		return frame, tex
 	end
-
-	local idx = GetRaidTargetIndex and GetRaidTargetIndex(unit) or nil
-	if not idx or idx < 1 or idx > 8 then
-		tex:Hide()
-		return
-	end
-
-	if SetRaidTargetIconTexture then
-		SetRaidTargetIconTexture(tex, idx)
-	else
-		tex:SetTexture("Interface\\TargetingFrame\\UI-RaidTargetingIcons")
-		local left = (idx - 1) / 8
-		local right = idx / 8
-		tex:SetTexCoord(left, right, 0, 1)
-	end
-	tex:Show()
+	local tex = (uf and (uf.raidTargetIcon or uf.RaidTargetIcon)) or (plate and (plate.raidTargetIcon or plate.RaidTargetIcon))
+	return nil, tex
 end
 
-local function ensureCenterRaidMark()
-	if M._centerRaidMark then return end
-	local f = CreateFrame("Frame", "HUI_RaidMarkCenter", UIParent)
-	f:SetSize(32, 32)
-	f:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
-	f:SetFrameStrata("TOOLTIP")
-	f:Hide()
-	local t = f:CreateTexture(nil, "OVERLAY", nil, 7)
-	t:SetAllPoints(f)
-	f._tex = t
-	M._centerRaidMark = f
+local function positionBlizzardRaidMark(plate, uf)
+	if not (plate and uf) then return end
+	local bar = uf._HUIBar
+	if not bar then return end
+
+	local frame, tex = findBlizzardRaidMark(plate, uf)
+	if frame then
+		frame:ClearAllPoints()
+		frame:SetPoint("BOTTOM", bar, "TOP", 0, 6)
+		frame:SetFrameStrata("HIGH")
+		frame:SetFrameLevel((bar:GetFrameLevel() or 0) + 50)
+		frame:SetSize(RAIDMARK_SIZE, RAIDMARK_SIZE)
+	end
+	if tex then
+		tex:ClearAllPoints()
+		tex:SetPoint("BOTTOM", bar, "TOP", 0, 6)
+		if tex.SetDrawLayer then tex:SetDrawLayer("OVERLAY", 7) end
+		if tex.SetSize then tex:SetSize(RAIDMARK_SIZE, RAIDMARK_SIZE) end
+	end
 end
 
-local function updateCenterRaidMark()
-	ensureCenterRaidMark()
-	local f = M._centerRaidMark
-	if not f then return end
-
-	if not (UnitExists and UnitExists("target")) then
-		f:Hide()
-		return
-	end
-
-	local idx = GetRaidTargetIndex and GetRaidTargetIndex("target") or nil
-	if not idx or idx < 1 or idx > 8 then
-		f:Hide()
-		return
-	end
-
-	if SetRaidTargetIconTexture then
-		SetRaidTargetIconTexture(f._tex, idx)
-	else
-		f._tex:SetTexture("Interface\\TargetingFrame\\UI-RaidTargetingIcons")
-		local left = (idx - 1) / 8
-		local right = idx / 8
-		f._tex:SetTexCoord(left, right, 0, 1)
-	end
-	f:Show()
+local function positionQuestMark(uf)
+	local holder = uf and uf._HUIQuestHolder
+	local bar = uf and uf._HUIBar
+	if not (holder and bar) then return end
+	holder:ClearAllPoints()
+	holder:SetPoint("BOTTOM", bar, "TOP", 0, 6)
 end
 
-local function updateQuestMark(uf, unit)
-	local tex = uf and uf._HUIQuestMark
-	if not tex or not unit or not UnitExists or not UnitExists(unit) then
-		if tex then tex:Hide() end
-		return
-	end
-
-	if UnitIsPlayer and UnitIsPlayer(unit) then
-		tex:Hide()
-		return
-	end
-
-	local isFriendly = UnitIsFriend and UnitIsFriend("player", unit)
-	if not isFriendly then
-		tex:Hide()
-		return
-	end
-
-	local icon
-	if C_QuestLog and C_QuestLog.GetQuestsForUnit then
-		local qs = C_QuestLog.GetQuestsForUnit(unit)
-		if qs and #qs > 0 then
-			icon = QUEST_ICON_AVAILABLE
-			for _, q in ipairs(qs) do
-				if q and (q.isComplete or q.isActive) then
-					icon = QUEST_ICON_ACTIVE
-					break
-				end
-			end
-		end
-	elseif UnitIsQuestGiver and UnitIsQuestGiver(unit) then
-		icon = QUEST_ICON_AVAILABLE
-	end
-
-	if not icon then
-		tex:Hide()
-		return
-	end
-
-	tex:SetTexture(icon)
-	tex:Show()
-end
+local function updateQuestMark() end
 
 local function targetLevelColor(unit, lvl)
 	-- Match our target frame rules:
@@ -328,6 +305,59 @@ local function safeHide(f)
 	if f.SetAlpha then f:SetAlpha(0) end
 end
 
+local function expandPlateHitRect(plate)
+	if not (plate and plate.SetHitRectInsets) then return end
+	-- Negative insets expand the clickable area. Use fixed values (plates can be re-laid out by Blizzard).
+	local dw = math.floor((PLATE_W / 2) + 0.5)
+	local dh = math.floor((PLATE_H / 2) + 0.5)
+	plate:SetHitRectInsets(-dw, -dw, -dh, -dh)
+end
+
+local function hideBlizzardQuestMarks(root, depth)
+	if not root or depth <= 0 then return end
+
+	-- Common named fields (varies by client/layout).
+	local candidates = {
+		root.QuestIcon,
+		root.questIcon,
+		root.QuestIconFrame,
+		root.questIconFrame,
+		root.QuestIconTexture,
+		root.questIconTexture,
+	}
+	for _, o in ipairs(candidates) do
+		if o then
+			safeHide(o)
+			if o.SetScript then
+				o:SetScript("OnShow", function(self) safeHide(self) end)
+			end
+		end
+	end
+
+	-- Hide any textures using the built-in quest icons.
+	if root.GetRegions then
+		for i = 1, select("#", root:GetRegions()) do
+			local r = select(i, root:GetRegions())
+			if r and r.GetObjectType and r:GetObjectType() == "Texture" and r.GetTexture then
+				local tx = r:GetTexture()
+				if type(tx) == "string" then
+					if tx:find("GossipFrame\\AvailableQuestIcon", 1, true) or tx:find("GossipFrame\\ActiveQuestIcon", 1, true) then
+						safeHide(r)
+					end
+				end
+			end
+		end
+	end
+
+	if root.GetChildren then
+		for i = 1, select("#", root:GetChildren()) do
+			hideBlizzardQuestMarks(select(i, root:GetChildren()), depth - 1)
+		end
+	end
+end
+
+local function positionRaidMark(uf) end
+
 local function hideUnknownFontStrings(frame, keepA, keepB, keepC, keepD)
 	if not frame or not frame.GetRegions then return end
 	for i = 1, select("#", frame:GetRegions()) do
@@ -369,6 +399,11 @@ local function ensurePlate(unit)
 
 	if uf.HUIStyled then
 		uf._HUIUnit = unit
+		expandPlateHitRect(plate)
+		positionBlizzardRaidMark(plate, uf)
+		-- Quest marks disabled for now.
+		hideBlizzardQuestMarks(plate, 3)
+		hideBlizzardQuestMarks(uf, 3)
 		return uf
 	end
 	uf.HUIStyled = true
@@ -384,14 +419,36 @@ local function ensurePlate(unit)
 	safeHide(uf.Name)
 	safeHide(uf.level)
 	safeHide(uf.Level)
+	hideBlizzardQuestMarks(plate, 3)
+	hideBlizzardQuestMarks(uf, 3)
 
 	local bar = CreateFrame("StatusBar", nil, uf)
 	bar:SetSize(PLATE_W, PLATE_H)
 	bar:SetPoint("CENTER", uf, "CENTER", 0, 0)
+	-- We handle clicks on a dedicated overlay button.
+	if bar.EnableMouse then bar:EnableMouse(false) end
 	bar:SetStatusBarTexture("Interface\\TARGETINGFRAME\\UI-StatusBar")
 	bar:SetMinMaxValues(0, 1)
 	bar:SetValue(0)
 	uf._HUIBar = bar
+	expandPlateHitRect(plate)
+
+	-- 3px resource bar below health.
+	local res = CreateFrame("StatusBar", nil, uf)
+	res:SetHeight(RESOURCE_H)
+	res:SetPoint("TOPLEFT", bar, "BOTTOMLEFT", 0, 0)
+	res:SetPoint("TOPRIGHT", bar, "BOTTOMRIGHT", 0, 0)
+	res:SetStatusBarTexture("Interface\\TARGETINGFRAME\\UI-StatusBar")
+	res:SetMinMaxValues(0, 1)
+	res:SetValue(0)
+	res:Hide()
+	uf._HUIResource = res
+
+	local resBorder = CreateFrame("Frame", nil, res, "BackdropTemplate")
+	resBorder:SetAllPoints(res)
+	resBorder:SetBackdrop({ edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
+	resBorder:SetBackdropBorderColor(unpack(COLOR_BORDER))
+	res._huiBorder = resBorder
 
 	local border = CreateFrame("Frame", nil, bar, "BackdropTemplate")
 	border:SetAllPoints(bar)
@@ -458,19 +515,10 @@ local function ensurePlate(unit)
 	levelText:SetFont(STANDARD_TEXT_FONT, LEVEL_FONT_SIZE, "THICKOUTLINE")
 	uf._HUILevel = levelText
 
-	-- Raid mark on the bar (inside the plate), on a higher frame level so it can't be occluded.
-	local raidMark = iconHolder:CreateTexture(nil, "OVERLAY", nil, 7)
-	raidMark:SetSize(20, 20)
-	raidMark:SetPoint("TOP", bar, "TOP", 0, 25)
-	raidMark:Hide()
-	uf._HUIRaidMark = raidMark
+	-- Position Blizzard's raid mark above the bar.
+	positionBlizzardRaidMark(plate, uf)
 
-	-- Quest marker ( ! / ? ) above the plate.
-	local questMark = uf:CreateTexture(nil, "OVERLAY", nil, 7)
-	questMark:SetSize(QUEST_ICON_W, QUEST_ICON_H)
-	questMark:SetPoint("BOTTOM", bar, "TOP", 0, 8)
-	questMark:Hide()
-	uf._HUIQuestMark = questMark
+		-- Quest marks disabled for now.
 
 	local pvpBadge = CreateFrame("Frame", nil, bar)
 	pvpBadge:SetSize(PVP_BADGE_W, PVP_BADGE_H)
@@ -489,7 +537,7 @@ local function ensurePlate(unit)
 	local hpText = bar:CreateFontString(nil, "OVERLAY")
 	hpText:SetPoint("RIGHT", bar, "RIGHT", -10, 0)
 	hpText:SetJustifyH("RIGHT")
-	hpText:SetFont(STANDARD_TEXT_FONT, 18, "THICKOUTLINE")
+	hpText:SetFont(STANDARD_TEXT_FONT, HP_FONT_SIZE, "THICKOUTLINE")
 	uf._HUIHP = hpText
 
 	-- Nuke any leftover Blizzard text (e.g. extra level strings) while keeping ours.
@@ -543,9 +591,12 @@ local function updatePlate(unit, what)
 			showSub = sub ~= ""
 		end
 
-		updateRaidMark(uf, unit)
+		-- Reposition Blizzard raid mark for this plate (if present).
+		if C_NamePlate and C_NamePlate.GetNamePlateForUnit then
+			local plate = C_NamePlate.GetNamePlateForUnit(unit)
+			if plate then positionBlizzardRaidMark(plate, uf) end
+		end
 		updatePvPBadge(uf, unit)
-		updateQuestMark(uf, unit)
 
 		uf._HUIName:ClearAllPoints()
 		if showSub then
@@ -561,10 +612,6 @@ local function updatePlate(unit, what)
 		local maxW = TEXT_MAX_W
 		if uf._HUIRaidMark and uf._HUIRaidMark:IsShown() then
 			maxW = maxW - 24
-		end
-		if uf._HUIQuestMark and uf._HUIQuestMark:IsShown() then
-			-- Quest marker is centered above, but keep a little extra headroom to avoid visual crowding.
-			maxW = maxW - 6
 		end
 		fitText(uf._HUIName, name, maxW, NAME_SIZE, MIN_NAME_SIZE)
 		if showSub then
@@ -615,7 +662,26 @@ local function updatePlate(unit, what)
 
 	if not what or what == "health" then
 		local hp = UnitHealth(unit) or 0
-		uf._HUIHP:SetText(tostring(hp))
+		local txt, baseDigits = formatHPText(hp)
+		uf._HUIHP:SetText(txt)
+		fitDigitsText(uf._HUIHP, txt, baseDigits, HP_FONT_SIZE, HP_FONT_MIN)
+	end
+
+	if not what or what == "power" then
+		local bar = uf._HUIResource
+		if bar then
+			local cur = UnitPower(unit) or 0
+			local max = UnitPowerMax(unit) or 0
+			if not max or max <= 0 then
+				bar:Hide()
+			else
+				bar:Show()
+				bar:SetMinMaxValues(0, max)
+				bar:SetValue(cur)
+				local pr, pg, pb = powerColor(unit)
+				bar:SetStatusBarColor(pr, pg, pb)
+			end
+		end
 	end
 end
 
@@ -646,20 +712,13 @@ local function updateAllRaidMarks()
 		local u = plate and plate.namePlateUnitToken
 		if u then
 			local uf = ensurePlate(u)
-			if uf then updateRaidMark(uf, u) end
+			if uf and plate then positionBlizzardRaidMark(plate, uf) end
 		end
 	end
 end
 
 local function updateAllQuestMarks()
-	if not (C_NamePlate and C_NamePlate.GetNamePlates) then return end
-	for _, plate in ipairs(C_NamePlate.GetNamePlates() or {}) do
-		local u = plate and plate.namePlateUnitToken
-		if u then
-			local uf = ensurePlate(u)
-			if uf then updateQuestMark(uf, u) end
-		end
-	end
+	-- Disabled for now.
 end
 
 local function apply()
@@ -685,6 +744,10 @@ local function apply()
 		set("UnitNameFriendlyPlayerShowLevel", "0")
 		set("UnitNameEnemyPlayerShowLevel", "0")
 		set("UnitNameEnemyPlayerShowGuild", "0")
+
+		-- Disable Blizzard quest markers over units (varies by client).
+		set("UnitNameNPCShowQuestIcon", "0")
+		set("UnitNameNPCShowQuestMarker", "0")
 	end
 
 	-- Blizzard recreates/shows these frequently; keep hiding after updates.
@@ -706,13 +769,16 @@ function M:Apply()
 		ev:RegisterEvent("PLAYER_ENTERING_WORLD")
 		ev:RegisterEvent("PLAYER_TARGET_CHANGED")
 		ev:RegisterEvent("RAID_TARGET_UPDATE")
-		ev:RegisterEvent("QUEST_LOG_UPDATE")
-		ev:RegisterEvent("GOSSIP_SHOW")
+		-- Quest marks disabled for now.
 		ev:RegisterEvent("NAME_PLATE_UNIT_ADDED")
 		ev:RegisterEvent("NAME_PLATE_UNIT_REMOVED")
 		ev:RegisterEvent("UNIT_NAME_UPDATE")
 		ev:RegisterEvent("UNIT_LEVEL")
 		ev:RegisterEvent("UNIT_HEALTH")
+		ev:RegisterEvent("UNIT_POWER_UPDATE")
+		ev:RegisterEvent("UNIT_POWER_FREQUENT")
+		ev:RegisterEvent("UNIT_MAXPOWER")
+		ev:RegisterEvent("UNIT_DISPLAYPOWER")
 		ev:SetScript("OnEvent", function(_, event, arg1)
 			if event == "PLAYER_ENTERING_WORLD" then
 				apply()
@@ -722,33 +788,26 @@ function M:Apply()
 						if u then updatePlate(u) end
 					end
 				end
-				updateSelectionAlpha()
-				updateAllRaidMarks()
-				updateAllQuestMarks()
-				updateCenterRaidMark()
-				return
-			end
-			if event == "PLAYER_TARGET_CHANGED" then
-				updateSelectionAlpha()
-				updateAllRaidMarks()
-				updateAllQuestMarks()
-				updateCenterRaidMark()
-				return
-			end
+					updateSelectionAlpha()
+					updateAllRaidMarks()
+					updateAllQuestMarks()
+					return
+				end
+				if event == "PLAYER_TARGET_CHANGED" then
+					updateSelectionAlpha()
+					updateAllRaidMarks()
+					updateAllQuestMarks()
+					return
+				end
 			if event == "RAID_TARGET_UPDATE" then
 				updateAllRaidMarks()
-				updateCenterRaidMark()
-				return
-			end
-			if event == "QUEST_LOG_UPDATE" or event == "GOSSIP_SHOW" then
-				updateAllQuestMarks()
 				return
 			end
 
 			if event == "NAME_PLATE_UNIT_ADDED" then
 				updatePlate(arg1)
+				updatePlate(arg1, "power")
 				updateSelectionAlpha()
-				updateAllQuestMarks()
 				return
 			end
 			if event == "NAME_PLATE_UNIT_REMOVED" then
@@ -756,7 +815,6 @@ function M:Apply()
 				local uf = plate and plate.UnitFrame
 				if uf then uf._HUIUnit = nil end
 				updateSelectionAlpha()
-				updateAllQuestMarks()
 				return
 			end
 
@@ -764,11 +822,16 @@ function M:Apply()
 				updatePlate(arg1, "health")
 				return
 			end
+			if event == "UNIT_POWER_UPDATE" or event == "UNIT_POWER_FREQUENT" or event == "UNIT_MAXPOWER" or event == "UNIT_DISPLAYPOWER" then
+				updatePlate(arg1, "power")
+				return
+			end
 			if event == "UNIT_NAME_UPDATE" or event == "UNIT_LEVEL" then
 				updatePlate(arg1, "name")
 				return
 			end
 		end)
+
+		end
+		apply()
 	end
-	apply()
-end
