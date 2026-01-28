@@ -43,7 +43,8 @@ local function useContainerItem(bag, slot)
 end
 
 local function sellJunk()
-	if not MerchantFrame or not MerchantFrame:IsShown() then return end
+	-- MERCHANT_SHOW fires before MerchantFrame is fully shown on some clients;
+	-- don't depend on MerchantFrame:IsShown() here.
 	if InCombatLockdown and InCombatLockdown() then return end
 	-- Leatrix-style modifier: hold Shift to skip auto-selling.
 	if IsShiftKeyDown and IsShiftKeyDown() then return end
@@ -86,7 +87,11 @@ function M:Apply()
 	M._ev = ev
 	ev:RegisterEvent("MERCHANT_SHOW")
 	ev:SetScript("OnEvent", function()
-		sellJunk()
+		-- Delay slightly so the merchant interaction is fully ready.
+		if C_Timer and C_Timer.After then
+			C_Timer.After(0, sellJunk)
+		else
+			sellJunk()
+		end
 	end)
 end
-

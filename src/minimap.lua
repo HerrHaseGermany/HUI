@@ -155,6 +155,8 @@ local function dockIndicator(frame, parent, point, relTo, relPoint, x, y, scale)
 	relTo = relTo or parent
 	-- Guard against bad anchor strings (some frames override SetPoint erroring hard).
 	relPoint = relPoint or point
+	-- Prevent Blizzard's frame position manager from moving it back.
+	frame.ignoreFramePositionManager = true
 	if frame.SetParent then frame:SetParent(parent) end
 	if frame.SetFrameStrata then frame:SetFrameStrata("HIGH") end
 	if frame.SetFrameLevel and relTo.GetFrameLevel then
@@ -214,6 +216,36 @@ local function dockMinimapIndicators(holderFrame)
 	dockIndicator(_G.DurabilityFrame, holderFrame, "TOPLEFT", holderFrame, "TOPLEFT", -200, -50, 1)
 end
 
+local function ensureIndicatorDocking(holderFrame)
+	if M._huiDockHooked then return end
+	M._huiDockHooked = true
+
+	-- Blizzard can reposition minimap indicators after we dock them (login, state changes, etc).
+	-- Re-dock whenever the frame position manager runs.
+	if hooksecurefunc then
+		hooksecurefunc("UIParent_ManageFramePositions", function()
+			if holder then dockMinimapIndicators(holder) end
+		end)
+	end
+
+	-- Also nudge for a short time after apply to win races with late-loading Blizzard code.
+	if C_Timer and C_Timer.NewTicker then
+		if M._dockTicker then
+			M._dockTicker:Cancel()
+			M._dockTicker = nil
+		end
+		local ticks = 0
+		M._dockTicker = C_Timer.NewTicker(0.2, function()
+			ticks = ticks + 1
+			if holder then dockMinimapIndicators(holder) end
+			if ticks >= 25 then
+				if M._dockTicker then M._dockTicker:Cancel() end
+				M._dockTicker = nil
+			end
+		end)
+	end
+end
+
 function M:Apply(db)
 	if db and db.enable and db.enable.minimap == false then return end
 
@@ -230,6 +262,7 @@ function M:Apply(db)
 	end
 
 	dockMinimapIndicators(h)
+	ensureIndicatorDocking(h)
 
 	local clock = ensureClock()
 	if clock then

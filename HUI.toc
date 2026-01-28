@@ -12,6 +12,7 @@ src\systemsettings.lua
 src\autosell.lua
 src\actionbars.lua
 src\xpbar.lua
+src\restingindicator.lua
 src\micromenu.lua
 src\minimap.lua
 src\minimapbuttons.lua
