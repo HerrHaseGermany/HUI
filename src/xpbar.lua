@@ -444,7 +444,7 @@ function M:Update()
 		local cRest = colorToHex(COLOR_RESTED)
 
 		local mid = string.format(
-			"|cff%sXP %.1f%%|r  |cff%sDone %.1f%%|r  |cff%sLog %.1f%%|r  |cff%sRest %.1f%%|r  (%.1f%%)",
+			"|cff%sXP %.1f%%|r  |cff%sDone %.1f%%|r  |cff%sLog %.1f%%|r  |cff%sRested %.1f%%|r  (%.1f%%)",
 			cXP, pctXP, cDone, pctDone, cLog, pctLog, cRest, pctRest, pctTotal
 		)
 

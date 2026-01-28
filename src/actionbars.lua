@@ -77,17 +77,16 @@ local function nudgePetBar()
 	end)
 end
 
--- Hardcoded layout: edit these numbers (no in-game movers/options).
-local BAR_SCALE = 1
-local BAR_GAP_Y = 0
+	-- Hardcoded layout: edit these numbers (no in-game movers/options).
+	local BAR_SCALE = 1
+	local BUTTON_SIZE = 40
+	local BUTTON_GAP = 7
+	local BAR_GAP_X = 6
+	local BAR_GAP_Y = 0
 
-local BAR1_X, BAR1_Y = 254, 40
-local BAR2_X, BAR2_Y = 0, BAR1_Y + 48 + BAR_GAP_Y
-local BAR3_X, BAR3_Y = 0, BAR2_Y + 48 + BAR_GAP_Y
-
--- Bar 4/5 (MultiBarRight/Left) positions.
-local BAR4_X, BAR4_Y = 325, -12
-local BAR5_X, BAR5_Y = 325, 54
+		local BAR1_X, BAR1_Y = 0, 46
+	local BAR2_X, BAR2_Y = BAR1_X, BAR1_Y + BUTTON_SIZE + BUTTON_GAP + BAR_GAP_Y
+	local BAR3_X, BAR3_Y = BAR1_X, BAR2_Y + BUTTON_SIZE + BUTTON_GAP + BAR_GAP_Y
 
 -- Class-dependent row (pet/stance/possess/totem) sits above bar 3.
 local CLASSBAR_X, CLASSBAR_Y = 0, 0
@@ -290,34 +289,59 @@ local function applyFrame(frame, point, relPoint, x, y, scale)
 	frame:SetScale(scale or 1)
 end
 
-local function layoutButtonGrid(frame, buttonPrefix, cols, rows, gap)
-	if InCombatLockdown() then return end
-	if not frame or not buttonPrefix then return end
-	cols = cols or 12
-	rows = rows or 1
-	gap = gap or 0
+	local function layoutButtonGrid(frame, buttonPrefix, cols, rows, gap)
+		if InCombatLockdown() then return end
+		if not frame or not buttonPrefix then return end
+		cols = cols or 12
+		rows = rows or 1
+		gap = gap or BUTTON_GAP or 0
 
 	local b1 = _G[buttonPrefix .. "1"]
 	if not b1 or not b1.GetWidth then return end
 
-	local bw = b1:GetWidth() or 0
-	local bh = b1:GetHeight() or 0
-	if bw <= 0 or bh <= 0 then bw, bh = 36, 36 end
+		local bw = BUTTON_SIZE or (b1:GetWidth() or 0)
+		local bh = BUTTON_SIZE or (b1:GetHeight() or 0)
+		if bw <= 0 or bh <= 0 then bw, bh = 36, 36 end
 
 	if frame.SetSize then
 		frame:SetSize(cols * bw + (cols - 1) * gap, rows * bh + (rows - 1) * gap)
 	end
 
-	for i = 1, cols * rows do
-		local btn = _G[buttonPrefix .. i]
-		if btn and btn.ClearAllPoints then
-			btn:ClearAllPoints()
-			local c = (i - 1) % cols
-			local r = math.floor((i - 1) / cols)
-			btn:SetPoint("TOPLEFT", frame, "TOPLEFT", c * (bw + gap), -r * (bh + gap))
+		for i = 1, cols * rows do
+			local btn = _G[buttonPrefix .. i]
+			if btn and btn.ClearAllPoints then
+				if btn.SetSize then btn:SetSize(bw, bh) end
+				btn:ClearAllPoints()
+				local c = (i - 1) % cols
+				local r = math.floor((i - 1) / cols)
+				btn:SetPoint("TOPLEFT", frame, "TOPLEFT", c * (bw + gap), -r * (bh + gap))
+			end
 		end
 	end
-end
+
+			local function skinActionButton(btn)
+				-- User requested: remove all custom button/background styling.
+				-- Keep a tiny cleanup to hide any previously-created custom frames until next /reload.
+				if not btn then return end
+				if btn._HUIBG and btn._HUIBG.Hide then btn._HUIBG:Hide() end
+				local nt = btn.GetNormalTexture and btn:GetNormalTexture()
+				if nt and nt.SetAlpha then nt:SetAlpha(1) end
+			end
+
+			local function skinButtons(prefix, count)
+				for i = 1, count do
+					skinActionButton(_G[prefix .. i])
+				end
+			end
+
+				local function ensureBar1StaticGrid()
+					-- (Disabled) custom always-on bar1 grid.
+					if M._huiBar1Grid and M._huiBar1Grid.Hide then M._huiBar1Grid:Hide() end
+				end
+
+			local function ensureGridHooks() end
+
+			local function forceGrid() end
 
 local function applyBagBar()
 	if InCombatLockdown() then return end
@@ -361,8 +385,8 @@ local function applyBagBar()
 end
 
 	layoutPrimary = function(cfg)
-		if not safe(MainMenuBar) then return end
-		if InCombatLockdown() then return end
+			if not safe(MainMenuBar) then return end
+			if InCombatLockdown() then return end
 
 	local function detach(frame)
 		if not frame then return end
@@ -382,37 +406,45 @@ end
 	detach(MainMenuBar)
 	detach(MultiBarBottomLeft)
 	detach(MultiBarBottomRight)
-	detach(MultiBarRight)
-	detach(MultiBarLeft)
+		detach(MultiBarRight)
+		detach(MultiBarLeft)
 
-	applyFrame(MainMenuBar, "BOTTOM", "BOTTOM", BAR1_X, BAR1_Y, BAR_SCALE)
-	if safe(MultiBarBottomLeft) then
-		applyFrame(MultiBarBottomLeft, "BOTTOM", "BOTTOM", BAR2_X, BAR2_Y, BAR_SCALE)
-	end
-	if safe(MultiBarBottomRight) then
-		applyFrame(MultiBarBottomRight, "BOTTOM", "BOTTOM", BAR3_X, BAR3_Y, BAR_SCALE)
-	end
-		if safe(MultiBarRight) then
-			applyFrame(MultiBarRight, "BOTTOM", "BOTTOM", BAR4_X, BAR3_Y + 48 + BAR_GAP_Y + BAR4_Y, BAR_SCALE)
-			layoutButtonGrid(MultiBarRight, "MultiBarRightButton", 4, 3, 0)
+		applyFrame(MainMenuBar, "BOTTOM", "BOTTOM", BAR1_X, BAR1_Y, BAR_SCALE)
+		layoutButtonGrid(MainMenuBar, "ActionButton", 12, 1, BUTTON_GAP)
+		if safe(MultiBarBottomLeft) then
+			applyFrame(MultiBarBottomLeft, "BOTTOM", "BOTTOM", BAR2_X, BAR2_Y, BAR_SCALE)
+			layoutButtonGrid(MultiBarBottomLeft, "MultiBarBottomLeftButton", 12, 1, BUTTON_GAP)
 		end
-		if safe(MultiBarLeft) then
-			applyFrame(MultiBarLeft, "BOTTOM", "BOTTOM", BAR5_X, BAR3_Y + (48 + BAR_GAP_Y) * 2 + BAR5_Y, BAR_SCALE)
-			layoutButtonGrid(MultiBarLeft, "MultiBarLeftButton", 4, 3, 0)
+		if safe(MultiBarBottomRight) then
+			applyFrame(MultiBarBottomRight, "BOTTOM", "BOTTOM", BAR3_X, BAR3_Y, BAR_SCALE)
+			layoutButtonGrid(MultiBarBottomRight, "MultiBarBottomRightButton", 12, 1, BUTTON_GAP)
+		end
+		-- Bar 4/5: 4x3 grids anchored to the right edge of bar 3 (matching the mockup).
+		if safe(MultiBarRight) and safe(MultiBarBottomRight) then
+			MultiBarRight:ClearAllPoints()
+				MultiBarRight:SetPoint("BOTTOMLEFT", MultiBarBottomRight, "TOPRIGHT", 6, 6)
+			MultiBarRight:SetScale(BAR_SCALE)
+			layoutButtonGrid(MultiBarRight, "MultiBarRightButton", 4, 3, BUTTON_GAP)
+		end
+		if safe(MultiBarLeft) and safe(MultiBarRight) then
+			MultiBarLeft:ClearAllPoints()
+			MultiBarLeft:SetPoint("BOTTOMLEFT", MultiBarRight, "TOPLEFT", 0, BUTTON_GAP + BAR_GAP_Y)
+			MultiBarLeft:SetScale(BAR_SCALE)
+			layoutButtonGrid(MultiBarLeft, "MultiBarLeftButton", 4, 3, BUTTON_GAP)
 		end
 
-	-- Class/extra bars (pet/stance/possess/totem + extra action bars) share the pet-bar position.
-	placePetBar()
+		-- Class/extra bars (pet/stance/possess/totem + extra action bars) share the pet-bar position.
+		placePetBar()
 
 	applyBagBar()
 end
 
-function M:Apply(db)
-	ensurePositionHook()
-	ensurePetVisibilityHook()
-	snapshot()
-	hideArt()
-	layoutPrimary(db.actionbars or {})
-	disableXPBars()
-	disableLatencyBar()
-end
+		function M:Apply(db)
+			ensurePositionHook()
+			ensurePetVisibilityHook()
+			snapshot()
+			hideArt()
+			layoutPrimary(db.actionbars or {})
+			disableXPBars()
+			disableLatencyBar()
+		end

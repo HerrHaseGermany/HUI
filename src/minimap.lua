@@ -187,16 +187,27 @@ local function dockMinimapIndicators(holderFrame)
 		firstAvailable(_G.MiniMapTrackingButton, _G.MiniMapTracking, _G.MiniMapTrackingFrame), -- tracking
 	}
 
-	local y = -6
+	local shown = {}
+	local totalH = 0
 	local gap = 2
 	for i = 1, #stack do
 		local f = stack[i]
-		if f then
-			-- Put the button's CENTER on the holder edge.
-			dockIndicator(f, holderFrame, "CENTER", holderFrame, "LEFT", 0, y, 0.9)
-			-- Approximate vertical stacking; many of these are ~20px tall.
-			y = y - ((f.GetHeight and f:GetHeight()) or 20) - gap
+		if f and f.IsShown and f:IsShown() then
+			local h = (f.GetHeight and f:GetHeight()) or 20
+			shown[#shown + 1] = { f = f, h = h }
+			totalH = totalH + h
 		end
+	end
+	if #shown > 1 then
+		totalH = totalH + ((#shown - 1) * gap)
+	end
+
+	-- Center the stack vertically on the holder.
+	local y = (totalH / 2) - ((shown[1] and shown[1].h) or 20) / 2
+	for i = 1, #shown do
+		local item = shown[i]
+		dockIndicator(item.f, holderFrame, "CENTER", holderFrame, "LEFT", 0, y, 0.9)
+		y = y - item.h - gap
 	end
 
 	-- Durability/repair indicator: move it down ~60px so it doesn't sit on the minimap center.

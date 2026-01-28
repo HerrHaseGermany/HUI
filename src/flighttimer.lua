@@ -49,69 +49,93 @@ local function getNumTaxiNodes()
 	return 0
 end
 
-local function getCurrentTaxiNodeName()
-	if not TaxiNodeGetType or not TaxiNodeName then return nil end
+local function getCurrentTaxiNodeIndex()
+	if not TaxiNodeGetType then return nil end
 	local n = getNumTaxiNodes()
 	if not n or n <= 0 then return nil end
 	for i = 1, n do
 		if TaxiNodeGetType(i) == "CURRENT" then
-			return cleanTaxiName(TaxiNodeName(i))
+			return i
 		end
 	end
 	return nil
 end
 
-local function getBuiltInDuration(destIndex)
-	-- Use HUI's built-in flight database (generated from Leatrix data).
-	if not (TaxiNodePosition and TaxiNodeGetType and TaxiNodeName) then return nil end
-	if not (TaxiGetNodeSlot and GetNumRoutes) then return nil end
+local function getCurrentTaxiNodeName()
+	if not TaxiNodeGetType or not TaxiNodeName then return nil end
+	local i = getCurrentTaxiNodeIndex()
+	if not i then return nil end
+	return cleanTaxiName(TaxiNodeName(i))
+end
 
+local function buildRouteIndexFor(data, faction, continent)
+	-- Build an index from startCoord -> endCoord -> duration from the routeString table.
+	-- This avoids needing hop APIs (GetNumRoutes/TaxiGetNodeSlot) and works from just start+dest coords.
+	if not (data and faction and continent) then return nil end
+	local contData = data[faction] and data[faction][continent]
+	if not contData then return nil end
+
+	M._routeIndex = M._routeIndex or {}
+	M._routeIndex[faction] = M._routeIndex[faction] or {}
+	if M._routeIndex[faction][continent] then return M._routeIndex[faction][continent] end
+
+	local idx = {}
+	for route, dur in pairs(contData) do
+		if type(route) == "string" and type(dur) == "number" and dur > 0 then
+			local first1, first2
+			local prev2, prev1
+			for token in route:gmatch("[^:]+") do
+				if not first1 then
+					first1 = token
+				elseif not first2 then
+					first2 = token
+				end
+				prev2, prev1 = prev1, token
+			end
+			if first1 and first2 and prev2 and prev1 then
+				local startCoord = first1 .. ":" .. first2
+				local endCoord = prev2 .. ":" .. prev1
+				local t = idx[startCoord]
+				if not t then
+					t = {}
+					idx[startCoord] = t
+				end
+				-- Prefer the smaller time if duplicates exist.
+				local cur = t[endCoord]
+				if not cur or dur < cur then
+					t[endCoord] = dur
+				end
+			end
+		end
+	end
+
+	M._routeIndex[faction][continent] = idx
+	return idx
+end
+
+local function getBuiltInDuration(destIndex)
+	if not TaxiNodePosition then return nil end
 	local data = HUI and HUI.flightData
 	if not data then return nil end
 	local faction = UnitFactionGroup and UnitFactionGroup("player") or nil
 	if not faction then return nil end
 	local continent = getContinent()
 	if not continent then return nil end
-	if not (data[faction] and data[faction][continent]) then return nil end
 
-	local n = getNumTaxiNodes()
-	if not n or n <= 0 then return nil end
-	local currentIndex
-	for i = 1, n do
-		if TaxiNodeGetType(i) == "CURRENT" then
-			currentIndex = i
-			break
-		end
-	end
-	if not currentIndex then return nil end
+	local curIndex = getCurrentTaxiNodeIndex()
+	if not curIndex then return nil end
 
-	local sx, sy = TaxiNodePosition(currentIndex)
-	local route = formatPos(sx, sy)
-	if not route then return nil end
-
-	local numHops = GetNumRoutes(destIndex) or 0
-	for hop = 2, numHops + 1 do
-		local hopIndex = TaxiGetNodeSlot(destIndex, hop, true)
-		if hopIndex then
-			local hx, hy = TaxiNodePosition(hopIndex)
-			local hopPos = formatPos(hx, hy)
-			if hopPos then
-				route = route .. ":" .. hopPos
-			end
-		end
-	end
-
+	local sx, sy = TaxiNodePosition(curIndex)
+	local startCoord = formatPos(sx, sy)
 	local ex, ey = TaxiNodePosition(destIndex)
-	local destPos = formatPos(ex, ey)
-	if destPos and not route:find(destPos, 1, true) then
-		route = route .. ":" .. destPos
-	end
+	local endCoord = formatPos(ex, ey)
+	if not (startCoord and endCoord) then return nil end
 
-	local duration = data[faction][continent][route]
-	if type(duration) == "number" and duration > 0 then
-		return duration
-	end
-	return nil
+	local idx = buildRouteIndexFor(data, faction, continent)
+	if not idx then return nil end
+	local m = idx[startCoord]
+	if not m then return nil end
+	return m[endCoord]
 end
 
 local function getRouteDB()
@@ -126,7 +150,7 @@ local function ensure()
 
 	local f = CreateFrame("Frame", "HUI_FlightTimer", UIParent, "BackdropTemplate")
 	f:SetSize(BAR_W, BAR_H)
-	f:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
+	f:SetPoint("CENTER", UIParent, "CENTER", 0, 200)
 	f:SetFrameStrata("HIGH")
 	f:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8", edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
 	f:SetBackdropColor(unpack(COLOR_BG))
@@ -194,14 +218,25 @@ local function show()
 	local f = M._f
 
 	-- Avoid stale data from previous flights.
-	if M._destName == nil then M._destName = "In Flight" end
+	-- Resolve destination if we have a pending slot (should always be known on takeoff).
+	if (not M._destName) and M._destSlot and TaxiNodeName then
+		M._destName = cleanTaxiName(TaxiNodeName(M._destSlot))
+	end
+	local destName = M._destName
+	if not destName or destName == "" then
+		-- If this ever happens, it means we missed TakeTaxiNode; avoid showing a misleading label.
+		return
+	end
 	if M._startFrom == nil then
-		M._startFrom = (GetMinimapZoneText and GetMinimapZoneText()) or (GetRealZoneText and GetRealZoneText()) or ""
+		M._startFrom = getCurrentTaxiNodeName()
+			or (GetMinimapZoneText and GetMinimapZoneText())
+			or (GetRealZoneText and GetRealZoneText())
+			or ""
 	end
 	if M._destDuration == nil then
 		local db = getRouteDB()
-		if db and M._startFrom and M._destName then
-			local key = routeKey(M._startFrom, M._destName)
+		if db and M._startFrom and destName then
+			local key = routeKey(M._startFrom, destName)
 			M._destDuration = tonumber(db[key] or 0) or 0
 		else
 			M._destDuration = 0
@@ -210,7 +245,7 @@ local function show()
 
 	f._startTime = GetTime() or 0
 	f._timeText:SetText("00:00")
-	f._destText:SetText(M._destName or "")
+	f._destText:SetText(destName or "")
 	f._duration = M._destDuration or 0
 	-- Initial visual mode.
 	if f._duration and f._duration > 0 then
@@ -235,18 +270,33 @@ local function hide()
 	if not M._f then return end
 	M._f:Hide()
 	M._destName = nil
+	M._destSlot = nil
 	M._destDuration = nil
 	M._startFrom = nil
+	M._pendingUntil = nil
+end
+
+local function hideFrameOnly()
+	if M._f then M._f:Hide() end
 end
 
 local function refresh()
+	local now = GetTime and GetTime() or 0
+	local pending = M._pendingUntil and now < M._pendingUntil
 	if UnitOnTaxi and UnitOnTaxi("player") then
 		if not (M._f and M._f:IsShown()) then
 			show()
 		end
-	else
-		hide()
+		return
 	end
+
+	-- Waiting for taxi takeoff: keep data, but do not show the bar yet.
+	if pending then
+		if M._f and M._f:IsShown() then hideFrameOnly() end
+		return
+	end
+
+	hide()
 end
 
 function M:Apply()
@@ -260,6 +310,7 @@ function M:Apply()
 	if hooksecurefunc then
 		hooksecurefunc("TakeTaxiNode", function(slot)
 			if not slot then return end
+			M._destSlot = slot
 			local name = TaxiNodeName and TaxiNodeName(slot) or nil
 			M._destName = cleanTaxiName(name) or "In Flight"
 			M._startFrom = getCurrentTaxiNodeName()
@@ -279,6 +330,18 @@ function M:Apply()
 			else
 				M._destDuration = tonumber(dur or 0) or 0
 			end
+
+			-- Taxi takeoff can lag a bit; keep our data around, but don't show until we're actually on taxi.
+			M._pendingUntil = (GetTime and GetTime() or 0) + 5
+
+			-- If the taxi didn't actually start (e.g. not enough money), clear the pending state.
+			if C_Timer and C_Timer.After then
+				C_Timer.After(1.0, function()
+					if M._pendingUntil and not (UnitOnTaxi and UnitOnTaxi("player")) then
+						hide()
+					end
+				end)
+			end
 		end)
 	end
 
@@ -289,7 +352,8 @@ function M:Apply()
 	ef:SetScript("OnEvent", function(_, event)
 		if event == "PLAYER_CONTROL_LOST" then
 			-- Taxi started; ensure we show with the current known duration.
-			refresh()
+			M._pendingUntil = nil
+			show()
 			return
 		end
 		if event == "PLAYER_CONTROL_GAINED" then

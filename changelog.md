@@ -12,6 +12,8 @@
 
 - Micromenu: fixed per-button coordinates (stable ordering + vertical layout)
 
+- Flighttimer: 500x30 bar with bright blue progress, remaining time centered, destination right-aligned.
+
 - Implement custom Classic Hardcore UI: player/target/targettarget unitframes, actionbar layout, minimap, chat layout, and micromenu layout.
 
 - Minimap: 300x300 square top-right, hide zone title + zoom buttons, zoom via scroll, clock bottom-left.
