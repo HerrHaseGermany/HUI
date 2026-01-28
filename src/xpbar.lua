@@ -10,7 +10,7 @@ local XPBAR_Y = 0
 local XPBAR_SCALE = 1
 
 -- Colors
-local COLOR_XP = { 0.58, 0.00, 0.55, 1 } -- current xp
+local COLOR_XP = { 0.68, 0.00, 0.65, 1 } -- current xp (slightly brighter violet)
 local COLOR_RESTED = { 0.10, 0.55, 1.00, 0.9 }
 local COLOR_XP_RESTED = { 0.10, 0.55, 1.00, 1 } -- blue tint when any rested XP exists
 local COLOR_QUEST_DONE = { 0.10, 0.85, 0.10, 0.9 } -- completed (not turned in)

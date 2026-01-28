@@ -4,6 +4,10 @@ local U = HUI.util
 local M = { name = "unitframes" }
 tinsert(HUI.modules, M)
 
+-- Use Blizzard's native aura buttons for perfect update/cancel behavior (including in combat),
+-- then re-anchor/restyle them to match HUI.
+local USE_BLIZZARD_AURAS = true
+
 -- Hardcoded layout (no options / no saved positioning).
 local PLAYER_X = 0
 local PLAYER_Y = -200
@@ -93,6 +97,8 @@ local AURA_GAP = 4
 local AURA_SPACER = 14
 local AURA_MAX_BUFFS = 40
 local AURA_MAX_DEBUFFS = 24
+local AURA_MAX_WEAPON_ENCHANTS = 2
+local AURA_MAX_TOTAL_BUFFS = AURA_MAX_BUFFS + AURA_MAX_WEAPON_ENCHANTS
 local AURA_BORDER_SIZE = 1
 local AURA_POS_X = 0
 local AURA_POS_Y = -110
@@ -175,8 +181,10 @@ local forceHide
 
 local function hideBlizzardAurasAndCastbar()
 	-- Buffs/Debuffs
-	if _G.BuffFrame then _G.BuffFrame:Hide() end
-	if _G.DebuffFrame then _G.DebuffFrame:Hide() end
+	if not USE_BLIZZARD_AURAS then
+		if _G.BuffFrame then _G.BuffFrame:Hide() end
+		if _G.DebuffFrame then _G.DebuffFrame:Hide() end
+	end
 
 	-- Castbars
 	if U and U.UnregisterAndHide then
@@ -332,6 +340,21 @@ local function createAuraButton(parent)
 	b:SetSize(AURA_SIZE, AURA_SIZE)
 	b:RegisterForClicks("AnyUp")
 
+	-- Visual feedback (hover/press) like Blizzard buttons.
+	do
+		local highlight = b:CreateTexture(nil, "HIGHLIGHT")
+		highlight:SetTexture("Interface\\Buttons\\ButtonHilight-Square")
+		highlight:SetBlendMode("ADD")
+		highlight:SetAllPoints(b)
+		b:SetHighlightTexture(highlight)
+
+		local pushed = b:CreateTexture(nil, "ARTWORK")
+		pushed:SetTexture("Interface\\Buttons\\WHITE8x8")
+		pushed:SetVertexColor(0, 0, 0, 0.25)
+		pushed:SetAllPoints(b)
+		b:SetPushedTexture(pushed)
+	end
+
 	local border = b:CreateTexture(nil, "BORDER")
 	border:SetTexture("Interface\\Buttons\\WHITE8x8")
 	border:SetVertexColor(0.6, 0.6, 0.6, 1)
@@ -350,7 +373,7 @@ local function createAuraButton(parent)
 	if cd.SetHideCountdownNumbers then cd:SetHideCountdownNumbers(true) end
 	-- Common addon convention (OmniCC) to disable center countdown text.
 	cd.noCooldownCount = true
-	-- No dark swipe overlay on icons (Classic clients can ignore SetSwipeColor).
+	-- No dark swipe overlay on icons; we render our own time text.
 	if cd.SetDrawSwipe then cd:SetDrawSwipe(false) end
 	if cd.SetDrawEdge then cd:SetDrawEdge(true) end
 	if cd.SetDrawBling then cd:SetDrawBling(true) end
@@ -376,6 +399,208 @@ end
 
 local updateAuraBar
 
+local function ensureBlizzardAuras()
+	if M._huiBlizzAuraAnchor then return end
+
+	local anchor = CreateFrame("Frame", "HUI_BlizzardAuraAnchor", UIParent)
+	anchor:SetFrameStrata("MEDIUM")
+	anchor:SetPoint("CENTER", UIParent, "CENTER", AURA_POS_X, AURA_POS_Y)
+	anchor:SetSize(1, 1)
+	M._huiBlizzAuraAnchor = anchor
+
+	local function getIcon(btn)
+		if not btn then return nil end
+		local n = btn.GetName and btn:GetName()
+		return btn.icon
+			or btn.Icon
+			or (n and (_G[n .. "Icon"] or _G[n .. "IconTexture"]))
+	end
+
+	local function skin(btn)
+		if not btn or btn._huiSkinned then return end
+		btn._huiSkinned = true
+
+		btn:SetSize(AURA_SIZE, AURA_SIZE)
+
+		local icon = getIcon(btn)
+		if icon and icon.SetTexCoord then
+			icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+		end
+
+		-- Remove default borders / background if present.
+		if btn.border and btn.border.Hide then btn.border:Hide() end
+		if btn.Border and btn.Border.Hide then btn.Border:Hide() end
+		local n = btn.GetName and btn:GetName()
+		if n and _G[n .. "Border"] and _G[n .. "Border"].Hide then _G[n .. "Border"]:Hide() end
+		if n and _G[n .. "DebuffBorder"] and _G[n .. "DebuffBorder"].Hide then _G[n .. "DebuffBorder"]:Hide() end
+		-- Hide Blizzard duration text (we draw our own).
+		if n and _G[n .. "Duration"] then
+			local d = _G[n .. "Duration"]
+			if d.SetAlpha then d:SetAlpha(0) end
+			if d.Hide then d:Hide() end
+		end
+		-- Hide the default normal texture (it can cover the icon depending on layer ordering).
+		if btn.GetNormalTexture then
+			local nt = btn:GetNormalTexture()
+			if nt and nt.SetAlpha then nt:SetAlpha(0) end
+			if nt and nt.Hide then nt:Hide() end
+		end
+
+		-- Border frame (edge only) so we never cover the icon.
+		local bf = CreateFrame("Frame", nil, btn, "BackdropTemplate")
+		bf:SetPoint("TOPLEFT", btn, "TOPLEFT", -AURA_BORDER_SIZE, AURA_BORDER_SIZE)
+		bf:SetPoint("BOTTOMRIGHT", btn, "BOTTOMRIGHT", AURA_BORDER_SIZE, -AURA_BORDER_SIZE)
+		bf:SetBackdrop({ edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = AURA_BORDER_SIZE })
+		bf:SetBackdropBorderColor(0.6, 0.6, 0.6, 1)
+		if bf.SetFrameLevel and btn.GetFrameLevel then
+			bf:SetFrameLevel((btn:GetFrameLevel() or 0) + 1)
+		end
+		btn._huiBorderFrame = bf
+
+		-- Match our cooldown look: no dark swipe; we can still rely on OmniCC or our text.
+		local cd = btn.cooldown or btn.Cooldown or (n and _G[n .. "Cooldown"])
+		if cd then
+			if cd.SetHideCountdownNumbers then cd:SetHideCountdownNumbers(true) end
+			cd.noCooldownCount = true
+			if cd.SetDrawSwipe then cd:SetDrawSwipe(false) end
+			if cd.SetDrawEdge then cd:SetDrawEdge(true) end
+			if cd.SetDrawBling then cd:SetDrawBling(true) end
+		end
+
+		-- Our own remaining-time text.
+		local t = btn:CreateFontString(nil, "OVERLAY")
+		if t.SetFont then t:SetFont(STANDARD_TEXT_FONT, AURA_FONT_SIZE, "THICKOUTLINE") end
+		t:SetPoint("CENTER", btn, "CENTER", 0, 0)
+		t:SetJustifyH("CENTER")
+		t:SetText("")
+		btn._huiTimeText = t
+
+		if btn.SetFrameLevel and anchor.GetFrameLevel then
+			btn:SetFrameLevel((anchor:GetFrameLevel() or 0) + 5)
+		end
+	end
+
+	local function layout()
+		local a = M._huiBlizzAuraAnchor
+		if not a then return end
+
+		local buffs = {}
+		local debuffs = {}
+
+		for i = 1, 2 do
+			local b = _G["TemporaryEnchantFrame" .. i]
+			if b and b.IsShown and b:IsShown() then
+				skin(b)
+				buffs[#buffs + 1] = b
+			end
+		end
+
+		for i = 1, 40 do
+			local b = _G["BuffButton" .. i]
+			if not b then break end
+			if b.IsShown and b:IsShown() then
+				skin(b)
+				buffs[#buffs + 1] = b
+			end
+		end
+
+		for i = 1, 16 do
+			local b = _G["DebuffButton" .. i]
+			if not b then break end
+			if b.IsShown and b:IsShown() then
+				skin(b)
+				debuffs[#debuffs + 1] = b
+			end
+		end
+
+		local buffCount = #buffs
+		local debuffCount = #debuffs
+		local spacer = (buffCount > 0 and debuffCount > 0) and AURA_SPACER or 0
+		local buffsWidth = (buffCount > 0) and (buffCount * AURA_SIZE + (buffCount - 1) * AURA_GAP) or 0
+		local debuffsWidth = (debuffCount > 0) and (debuffCount * AURA_SIZE + (debuffCount - 1) * AURA_GAP) or 0
+		local totalWidth = buffsWidth + spacer + debuffsWidth
+
+		local x = -totalWidth / 2 + (AURA_SIZE / 2)
+
+		for i = 1, buffCount do
+			local b = buffs[i]
+			b:ClearAllPoints()
+			b:SetPoint("CENTER", a, "CENTER", x, 0)
+			b:SetSize(AURA_SIZE, AURA_SIZE)
+			x = x + AURA_SIZE
+			if i < buffCount then x = x + AURA_GAP end
+		end
+
+		if spacer > 0 then x = x + spacer end
+
+		for i = 1, debuffCount do
+			local b = debuffs[i]
+			b:ClearAllPoints()
+			b:SetPoint("CENTER", a, "CENTER", x, 0)
+			b:SetSize(AURA_SIZE, AURA_SIZE)
+			x = x + AURA_SIZE
+			if i < debuffCount then x = x + AURA_GAP end
+		end
+	end
+
+	M._huiLayoutBlizzAuras = layout
+
+	-- Keep our remaining-time text updated without touching secure attributes.
+	anchor._huiTick = 0
+	anchor:SetScript("OnUpdate", function(self, elapsed)
+		self._huiTick = (self._huiTick or 0) + (elapsed or 0)
+		if self._huiTick < 0.2 then return end
+		self._huiTick = 0
+
+		local now = GetTime()
+
+		for i = 1, 40 do
+			local b = _G["BuffButton" .. i]
+			if b and b._huiTimeText and b.IsShown and b:IsShown() then
+				local _, _, _, _, duration, expirationTime = UnitAura("player", i, "HELPFUL")
+				if duration and duration > 0 and expirationTime and expirationTime > 0 then
+					local remain = expirationTime - now
+					if remain <= 0 then
+						b._huiTimeText:SetText("")
+					elseif remain >= 60 then
+						b._huiTimeText:SetText(string.format("%d", math.floor(remain / 60)))
+					else
+						b._huiTimeText:SetText(string.format("%d", math.ceil(remain)))
+					end
+				else
+					b._huiTimeText:SetText("")
+				end
+			end
+		end
+
+		for i = 1, 16 do
+			local b = _G["DebuffButton" .. i]
+			if b and b._huiTimeText and b.IsShown and b:IsShown() then
+				local _, _, _, _, duration, expirationTime = UnitAura("player", i, "HARMFUL")
+				if duration and duration > 0 and expirationTime and expirationTime > 0 then
+					local remain = expirationTime - now
+					if remain <= 0 then
+						b._huiTimeText:SetText("")
+					elseif remain >= 60 then
+						b._huiTimeText:SetText(string.format("%d", math.floor(remain / 60)))
+					else
+						b._huiTimeText:SetText(string.format("%d", math.ceil(remain)))
+					end
+				else
+					b._huiTimeText:SetText("")
+				end
+			end
+		end
+	end)
+
+	if hooksecurefunc and _G.BuffFrame_UpdateAllBuffAnchors then
+		hooksecurefunc("BuffFrame_UpdateAllBuffAnchors", layout)
+	end
+	if hooksecurefunc and _G.DebuffButton_UpdateAnchors then
+		hooksecurefunc("DebuffButton_UpdateAnchors", layout)
+	end
+end
+
 local function ensureAuraBar()
 	if M._huiAuraBar then return end
 	local f = CreateFrame("Frame", "HUI_AuraBar", UIParent)
@@ -385,19 +610,31 @@ local function ensureAuraBar()
 	f:Hide()
 	M._huiAuraBar = f
 
-	-- Weapon enchants (main/offhand) displayed as buffs in our aura bar.
-	f._huiWeaponButtons = {
-		createAuraButton(f),
-		createAuraButton(f),
-	}
+	-- Secure buttons can't be re-anchored in combat, so keep per-button points fixed and
+	-- move only these non-secure containers to keep the row centered.
+	local buffContainer = CreateFrame("Frame", nil, f)
+	buffContainer:SetPoint("CENTER", f, "CENTER", 0, 0)
+	buffContainer:SetSize(1, AURA_SIZE)
+	f._huiBuffContainer = buffContainer
+
+	local debuffContainer = CreateFrame("Frame", nil, f)
+	debuffContainer:SetPoint("CENTER", f, "CENTER", 0, 0)
+	debuffContainer:SetSize(1, AURA_SIZE)
+	f._huiDebuffContainer = debuffContainer
 
 	f._huiBuffButtons = {}
 	f._huiDebuffButtons = {}
-	for i = 1, AURA_MAX_BUFFS do
-		f._huiBuffButtons[i] = createAuraButton(f)
+	for i = 1, AURA_MAX_TOTAL_BUFFS do
+		local b = createAuraButton(buffContainer)
+		b:ClearAllPoints()
+		b:SetPoint("LEFT", buffContainer, "LEFT", (i - 1) * (AURA_SIZE + AURA_GAP), 0)
+		f._huiBuffButtons[i] = b
 	end
 	for i = 1, AURA_MAX_DEBUFFS do
-		f._huiDebuffButtons[i] = createAuraButton(f)
+		local b = createAuraButton(debuffContainer)
+		b:ClearAllPoints()
+		b:SetPoint("LEFT", debuffContainer, "LEFT", (i - 1) * (AURA_SIZE + AURA_GAP), 0)
+		f._huiDebuffButtons[i] = b
 	end
 
 	f._huiTimeAccumulator = 0
@@ -407,6 +644,15 @@ local function ensureAuraBar()
 		self._huiTimeAccumulator = 0
 
 		local now = GetTime()
+		-- In combat, UNIT_AURA can be delayed or missed; rescan periodically here too.
+		self._huiRescanAccumulator = (self._huiRescanAccumulator or 0) + 0.2
+		if self._huiRescanAccumulator >= 0.2 then
+			self._huiRescanAccumulator = 0
+			if UnitAffectingCombat and UnitAffectingCombat("player") then
+				updateAuraBar()
+			end
+		end
+
 		local function updateButtonTime(btn)
 			if not btn or not btn:IsShown() then return end
 			local exp = btn._huiExpiration
@@ -440,13 +686,10 @@ local function ensureAuraBar()
 			end
 		end
 
-		for _, btn in ipairs(self._huiBuffButtons) do updateButtonTime(btn) end
-		for _, btn in ipairs(self._huiDebuffButtons) do updateButtonTime(btn) end
-		if self._huiWeaponButtons then
-			for _, btn in ipairs(self._huiWeaponButtons) do updateButtonTime(btn) end
-		end
-	end)
-end
+			for _, btn in ipairs(self._huiBuffButtons) do updateButtonTime(btn) end
+			for _, btn in ipairs(self._huiDebuffButtons) do updateButtonTime(btn) end
+		end)
+	end
 
 local function hideBlizzardWeaponEnchants()
 	-- Blizzard displays weapon buffs via TemporaryEnchantFrame.
@@ -470,6 +713,21 @@ local function createTargetAuraButton(parent)
 	local b = CreateFrame("Button", nil, parent)
 	b:SetSize(TARGET_AURA_SIZE, TARGET_AURA_SIZE)
 	b:RegisterForClicks("AnyUp")
+
+	-- Visual feedback (hover/press) like Blizzard buttons.
+	do
+		local highlight = b:CreateTexture(nil, "HIGHLIGHT")
+		highlight:SetTexture("Interface\\Buttons\\ButtonHilight-Square")
+		highlight:SetBlendMode("ADD")
+		highlight:SetAllPoints(b)
+		b:SetHighlightTexture(highlight)
+
+		local pushed = b:CreateTexture(nil, "ARTWORK")
+		pushed:SetTexture("Interface\\Buttons\\WHITE8x8")
+		pushed:SetVertexColor(0, 0, 0, 0.25)
+		pushed:SetAllPoints(b)
+		b:SetPushedTexture(pushed)
+	end
 
 	local border = b:CreateTexture(nil, "BORDER")
 	border:SetTexture("Interface\\Buttons\\WHITE8x8")
@@ -537,6 +795,15 @@ local function ensureTargetAuraBar()
 		self._huiTimeAccumulator = 0
 
 		local now = GetTime()
+		-- In combat, target auras can be delayed; rescan periodically here too.
+		self._huiRescanAccumulator = (self._huiRescanAccumulator or 0) + 0.2
+		if self._huiRescanAccumulator >= 0.2 then
+			self._huiRescanAccumulator = 0
+			if UnitAffectingCombat and UnitAffectingCombat("player") then
+				updateTargetAuraBar()
+			end
+		end
+
 		local function updateButtonTime(btn)
 			if not btn or not btn:IsShown() then return end
 			local exp = btn._huiExpiration
@@ -1668,6 +1935,16 @@ local function updateCastOrTimers()
 end
 
 updateAuraBar = function()
+	if USE_BLIZZARD_AURAS then
+		ensureBlizzardAuras()
+		if M._huiAuraBar then M._huiAuraBar:Hide() end
+		if _G.BuffFrame and _G.BuffFrame.Show then _G.BuffFrame:Show() end
+		if _G.DebuffFrame and _G.DebuffFrame.Show then _G.DebuffFrame:Show() end
+		if _G.TemporaryEnchantFrame and _G.TemporaryEnchantFrame.Show then _G.TemporaryEnchantFrame:Show() end
+		if M._huiLayoutBlizzAuras then M._huiLayoutBlizzAuras() end
+		return
+	end
+
 	ensureAuraBar()
 	local bar = M._huiAuraBar
 	if not bar then return end
@@ -1721,12 +1998,12 @@ updateAuraBar = function()
 			end
 		end
 
-		-- Weapon enchants (main/offhand) count as "my buffs" and should not show on Blizzard frames.
+		-- Weapon enchants (main/offhand) displayed as buffs.
 		do
-			local hasMH, mhExpMS, mhCharges, mhEnchantID, hasOH, ohExpMS, ohCharges, ohEnchantID =
-				false, 0, 0, 0, false, 0, 0, 0
+			local hasMH, mhExpMS, mhCharges, _, hasOH, ohExpMS, ohCharges =
+				false, 0, 0, 0, false, 0, 0
 			if GetWeaponEnchantInfo then
-				hasMH, mhExpMS, mhCharges, mhEnchantID, hasOH, ohExpMS, ohCharges, ohEnchantID = GetWeaponEnchantInfo()
+				hasMH, mhExpMS, mhCharges, _, hasOH, ohExpMS, ohCharges = GetWeaponEnchantInfo()
 			end
 			local now = GetTime()
 
@@ -1734,226 +2011,205 @@ updateAuraBar = function()
 				local icon = GetInventoryItemTexture and GetInventoryItemTexture("player", slotIndex == 1 and 16 or 17)
 				weaponBuffs[#weaponBuffs + 1] = {
 					type = "weapon",
-					slot = slotIndex, -- 1 = mainhand, 2 = offhand
+					slot = slotIndex,
+					filter = "HELPFUL",
 					name = (slotIndex == 1) and "Main Hand" or "Off Hand",
 					icon = icon,
-				count = charges or 0,
-				duration = (expMS or 0) / 1000,
-				expirationTime = now + ((expMS or 0) / 1000),
-			}
-		end
-
-		if hasMH and mhExpMS and mhExpMS > 0 then
-			addWeapon(1, mhExpMS, mhCharges)
-		end
-			if hasOH and ohExpMS and ohExpMS > 0 then
-				addWeapon(2, ohExpMS, ohCharges)
+					count = charges or 0,
+					duration = (expMS or 0) / 1000,
+					expirationTime = now + ((expMS or 0) / 1000),
+				}
 			end
+
+			if hasMH and mhExpMS and mhExpMS > 0 then addWeapon(1, mhExpMS, mhCharges) end
+			if hasOH and ohExpMS and ohExpMS > 0 then addWeapon(2, ohExpMS, ohCharges) end
 		end
 
-		-- Prepend weapon buffs so they show up as the left-most part of the buff row.
-		if #weaponBuffs > 0 then
-			local merged = {}
-			for i = 1, #weaponBuffs do merged[#merged + 1] = weaponBuffs[i] end
-			for i = 1, #myBuffs do merged[#merged + 1] = myBuffs[i] end
-			myBuffs = merged
-		end
+		-- Final ordered lists (weapon -> player buffs -> other buffs).
+		local buffs = {}
+		for i = 1, #weaponBuffs do buffs[#buffs + 1] = weaponBuffs[i] end
+		for i = 1, #myBuffs do buffs[#buffs + 1] = myBuffs[i] end
+		for i = 1, #otherBuffs do buffs[#buffs + 1] = otherBuffs[i] end
 
-	-- Layout: center -> left side buffs, right side debuffs. Order (left->right):
-	-- my buffs, other buffs, (optional spacer), debuffs.
-	local totalBuffs = #myBuffs + #otherBuffs
-	local hasBuffs = totalBuffs > 0
-	local hasDebuffs = #debuffs > 0
-	local spacer = (hasBuffs and hasDebuffs) and AURA_SPACER or 0
+		-- Layout: center -> left side buffs, right side debuffs.
+		local totalBuffs = #buffs
+		local hasBuffs = totalBuffs > 0
+		local hasDebuffs = #debuffs > 0
+		local spacer = (hasBuffs and hasDebuffs) and AURA_SPACER or 0
 
-	local buffsWidth = (totalBuffs > 0) and (totalBuffs * AURA_SIZE + (totalBuffs - 1) * AURA_GAP) or 0
-	local debuffsWidth = (hasDebuffs) and (#debuffs * AURA_SIZE + (#debuffs - 1) * AURA_GAP) or 0
-	local totalWidth = buffsWidth + spacer + debuffsWidth
+		local buffsWidth = (totalBuffs > 0) and (totalBuffs * AURA_SIZE + (totalBuffs - 1) * AURA_GAP) or 0
+		local debuffsWidth = (hasDebuffs) and (#debuffs * AURA_SIZE + (#debuffs - 1) * AURA_GAP) or 0
+		local totalWidth = buffsWidth + spacer + debuffsWidth
 
-	bar:SetSize(math.max(1, totalWidth), AURA_SIZE)
-	bar:Show()
+		bar:SetSize(math.max(1, totalWidth), AURA_SIZE)
+		bar:Show()
 
-	-- Place icons by CENTER relative to the bar center so a single aura is truly centered.
-	local x = -totalWidth / 2 + (AURA_SIZE / 2)
-
-		local function applyButton(btn, aura, unit)
-			btn:SetSize(AURA_SIZE, AURA_SIZE)
-		btn._huiExpiration = aura.expirationTime
-		btn._huiDuration = aura.duration
-		btn._huiAuraIndex = aura.index
-		btn._huiAuraFilter = aura.filter
-
-		if btn._huiIcon then btn._huiIcon:SetTexture(aura.icon) end
-		if btn._huiCount then
-			if aura.count and aura.count > 1 then
-				btn._huiCount:SetText(tostring(aura.count))
+		-- Position containers (non-secure) to keep the row centered even in combat.
+		if bar._huiBuffContainer then
+			if buffsWidth > 0 then
+				bar._huiBuffContainer:SetSize(buffsWidth, AURA_SIZE)
+				bar._huiBuffContainer:ClearAllPoints()
+				bar._huiBuffContainer:SetPoint("CENTER", bar, "CENTER", (-totalWidth / 2) + (buffsWidth / 2), 0)
+				bar._huiBuffContainer:Show()
 			else
-				btn._huiCount:SetText("")
+				bar._huiBuffContainer:Hide()
 			end
 		end
-		if btn._huiCooldown and aura.duration and aura.duration > 0 and aura.expirationTime and aura.expirationTime > 0 then
-			btn._huiCooldown:SetCooldown(aura.expirationTime - aura.duration, aura.duration)
-		elseif btn._huiCooldown then
-			btn._huiCooldown:Clear()
+		if bar._huiDebuffContainer then
+			if debuffsWidth > 0 then
+				bar._huiDebuffContainer:SetSize(debuffsWidth, AURA_SIZE)
+				bar._huiDebuffContainer:ClearAllPoints()
+				bar._huiDebuffContainer:SetPoint("CENTER", bar, "CENTER", (-totalWidth / 2) + buffsWidth + spacer + (debuffsWidth / 2), 0)
+				bar._huiDebuffContainer:Show()
+			else
+				bar._huiDebuffContainer:Hide()
+			end
 		end
 
-			-- Weapon enchants are not real UnitAuras; handle tooltip/cancel separately.
+		-- Hide all first.
+		for _, btn in ipairs(bar._huiBuffButtons) do btn:Hide() end
+		for _, btn in ipairs(bar._huiDebuffButtons) do btn:Hide() end
+
+		local function applyBuffButton(btn, aura)
+			btn._huiExpiration = aura.expirationTime
+			btn._huiDuration = aura.duration
+			btn._huiAuraIndex = aura.index
+			btn._huiAuraFilter = aura.filter
+
+			if btn._huiIcon then btn._huiIcon:SetTexture(aura.icon) end
+			if btn._huiCount then
+				if aura.count and aura.count > 1 then btn._huiCount:SetText(tostring(aura.count)) else btn._huiCount:SetText("") end
+			end
+			if btn._huiCooldown and aura.duration and aura.duration > 0 and aura.expirationTime and aura.expirationTime > 0 then
+				btn._huiCooldown:SetCooldown(aura.expirationTime - aura.duration, aura.duration)
+			elseif btn._huiCooldown then
+				btn._huiCooldown:Clear()
+			end
+
 			if aura.type == "weapon" then
-			btn:SetScript("OnEnter", function(self)
-				GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-				local slot = (aura.slot == 1) and 16 or 17
-				if GameTooltip.SetInventoryItem then
-					GameTooltip:SetInventoryItem("player", slot)
-				end
-				GameTooltip:Show()
-			end)
-			btn:SetScript("OnLeave", function()
-				if GameTooltip and GameTooltip.Hide then GameTooltip:Hide() end
-			end)
-				btn:SetScript("OnClick", function(_, button)
-					if button ~= "RightButton" then return end
-					if CancelItemTempEnchantment then
-						CancelItemTempEnchantment(aura.slot)
-					end
-					-- Hide immediately; the UNIT_AURA update can lag slightly.
-					if btn.Hide then btn:Hide() end
-					if C_Timer and C_Timer.After then
-						C_Timer.After(0, updateAuraBar)
-					else
-						updateAuraBar()
-					end
-				end)
-				btn:EnableMouse(true)
-			else
-			-- Tooltip
-			btn:SetScript("OnEnter", function(self)
-				GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-				GameTooltip:SetUnitAura(unit, self._huiAuraIndex, self._huiAuraFilter)
-				GameTooltip:Show()
-			end)
-			btn:SetScript("OnLeave", function()
-				if GameTooltip and GameTooltip.Hide then GameTooltip:Hide() end
-			end)
-
-				-- Cancel on RIGHT click for buffs (Blizzard-style).
-				if aura.filter == "HELPFUL" then
-				if InCombatLockdown and InCombatLockdown() then
-					-- Do not change attributes in combat.
-				else
-					btn:SetAttribute("*type1", nil)
-					btn:SetAttribute("*type2", "cancelaura")
-					btn:SetAttribute("unit", unit)
-					btn:SetAttribute("index", aura.index)
-					end
+				btn._huiWeaponSlot = aura.slot
+				if not btn._huiWeaponHooked then
+					btn._huiWeaponHooked = true
+					btn:SetScript("OnEnter", function(self)
+						GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+						local slot = (self._huiWeaponSlot == 1) and 16 or 17
+						if GameTooltip.SetInventoryItem then GameTooltip:SetInventoryItem("player", slot) end
+						GameTooltip:Show()
+					end)
+					btn:SetScript("OnLeave", function()
+						if GameTooltip and GameTooltip.Hide then GameTooltip:Hide() end
+					end)
+					btn:SetScript("OnClick", function(self, mouseButton)
+						if mouseButton ~= "RightButton" then return end
+						if CancelItemTempEnchantment and self._huiWeaponSlot then
+							CancelItemTempEnchantment(self._huiWeaponSlot)
+						end
+						if self.Hide then self:Hide() end
+						if C_Timer and C_Timer.After then
+							C_Timer.After(0, updateAuraBar)
+						else
+							updateAuraBar()
+						end
+					end)
 					btn:EnableMouse(true)
-
-						-- Make cancels feel instant: hide on PostClick and refresh auras next frame.
-						if not btn._huiCancelHooked and btn.HookScript then
-							btn._huiCancelHooked = true
-							btn:HookScript("PreClick", function(self, mouseButton)
-								if mouseButton ~= "RightButton" then return end
-								if not (self._huiAuraIndex and self._huiAuraFilter) then return end
-								local n, _, _, _, _, _, _, _, _, spellId = UnitAura("player", self._huiAuraIndex, self._huiAuraFilter)
-								self._huiCancelKey = spellId or n
-							end)
-							btn:HookScript("PostClick", function(self, mouseButton)
-								if mouseButton ~= "RightButton" then return end
-								if self._huiCancelKey then
-									if not M._huiAuraSuppress then M._huiAuraSuppress = {} end
-									local t = GetTime and GetTime() or 0
-									M._huiAuraSuppress[self._huiCancelKey] = t + 0.75
-									self._huiCancelKey = nil
-								end
-								if self.Hide then self:Hide() end
-								if C_Timer and C_Timer.After then
-									C_Timer.After(0, updateAuraBar)
-								else
-									updateAuraBar()
-							end
-						end)
-					end
-				else
-				-- Debuffs not cancelable.
-				if InCombatLockdown and InCombatLockdown() then
-					-- no-op
-				else
+				end
+				if not (InCombatLockdown and InCombatLockdown()) then
 					btn:SetAttribute("*type1", nil)
 					btn:SetAttribute("*type2", nil)
 					btn:SetAttribute("unit", nil)
 					btn:SetAttribute("index", nil)
 				end
+			else
+				if not btn._huiAuraHooked then
+					btn._huiAuraHooked = true
+					btn:SetScript("OnEnter", function(self)
+						GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+						GameTooltip:SetUnitAura("player", self._huiAuraIndex, self._huiAuraFilter)
+						GameTooltip:Show()
+					end)
+					btn:SetScript("OnLeave", function()
+						if GameTooltip and GameTooltip.Hide then GameTooltip:Hide() end
+					end)
+					if btn.HookScript then
+						btn:HookScript("PreClick", function(self, mouseButton)
+							if mouseButton ~= "RightButton" then return end
+							if not (self._huiAuraIndex and self._huiAuraFilter) then return end
+							local n, _, _, _, _, _, _, _, _, spellId = UnitAura("player", self._huiAuraIndex, self._huiAuraFilter)
+							self._huiCancelKey = spellId or n
+						end)
+						btn:HookScript("PostClick", function(self, mouseButton)
+							if mouseButton ~= "RightButton" then return end
+							if self._huiCancelKey then
+								if not M._huiAuraSuppress then M._huiAuraSuppress = {} end
+								local t = GetTime and GetTime() or 0
+								M._huiAuraSuppress[self._huiCancelKey] = t + 0.75
+								self._huiCancelKey = nil
+							end
+							if self.Hide then self:Hide() end
+							if C_Timer and C_Timer.After then
+								C_Timer.After(0, updateAuraBar)
+							else
+								updateAuraBar()
+							end
+						end)
+					end
+					btn:EnableMouse(true)
+				end
+
+				if not (InCombatLockdown and InCombatLockdown()) then
+					btn:SetAttribute("*type1", nil)
+					btn:SetAttribute("*type2", "cancelaura")
+					btn:SetAttribute("unit", "player")
+					btn:SetAttribute("index", aura.index)
+				end
+			end
+
+			btn:Show()
+		end
+
+		for i = 1, math.min(#buffs, #bar._huiBuffButtons) do
+			applyBuffButton(bar._huiBuffButtons[i], buffs[i])
+		end
+
+		local function applyDebuffButton(btn, aura)
+			btn._huiExpiration = aura.expirationTime
+			btn._huiDuration = aura.duration
+			btn._huiAuraIndex = aura.index
+			btn._huiAuraFilter = aura.filter
+			if btn._huiIcon then btn._huiIcon:SetTexture(aura.icon) end
+			if btn._huiCount then
+				if aura.count and aura.count > 1 then btn._huiCount:SetText(tostring(aura.count)) else btn._huiCount:SetText("") end
+			end
+			if btn._huiCooldown and aura.duration and aura.duration > 0 and aura.expirationTime and aura.expirationTime > 0 then
+				btn._huiCooldown:SetCooldown(aura.expirationTime - aura.duration, aura.duration)
+			elseif btn._huiCooldown then
+				btn._huiCooldown:Clear()
+			end
+			if not btn._huiDebuffHooked then
+				btn._huiDebuffHooked = true
+				btn:SetScript("OnEnter", function(self)
+					GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+					GameTooltip:SetUnitAura("player", self._huiAuraIndex, self._huiAuraFilter)
+					GameTooltip:Show()
+				end)
+				btn:SetScript("OnLeave", function()
+					if GameTooltip and GameTooltip.Hide then GameTooltip:Hide() end
+				end)
 				btn:EnableMouse(true)
 			end
+			if not (InCombatLockdown and InCombatLockdown()) then
+				btn:SetAttribute("*type1", nil)
+				btn:SetAttribute("*type2", nil)
+				btn:SetAttribute("unit", nil)
+				btn:SetAttribute("index", nil)
+			end
+			btn:Show()
 		end
 
-		btn:Show()
-	end
-
-	-- Hide all first
-	if bar._huiWeaponButtons then
-		for _, btn in ipairs(bar._huiWeaponButtons) do btn:Hide() end
-	end
-	for _, btn in ipairs(bar._huiBuffButtons) do btn:Hide() end
-	for _, btn in ipairs(bar._huiDebuffButtons) do btn:Hide() end
-
-	local buffButtonIndex = 1
-	local buffsPlaced = 0
-	-- Weapon buttons take the first slots.
-	local weaponPlaced = 0
-	if bar._huiWeaponButtons then
-		for _, aura in ipairs(myBuffs) do
-			if aura.type ~= "weapon" then break end
-			weaponPlaced = weaponPlaced + 1
-			local btn = bar._huiWeaponButtons[weaponPlaced]
-			if not btn then break end
-			btn:SetPoint("CENTER", bar, "CENTER", x, 0)
-			applyButton(btn, aura, "player")
-			buffsPlaced = buffsPlaced + 1
-			x = x + AURA_SIZE
-			if buffsPlaced < totalBuffs then x = x + AURA_GAP end
+		for i = 1, math.min(#debuffs, #bar._huiDebuffButtons) do
+			applyDebuffButton(bar._huiDebuffButtons[i], debuffs[i])
 		end
 	end
-
-	for _, aura in ipairs(myBuffs) do
-		if aura.type == "weapon" then
-			-- already handled above
-		else
-		local btn = bar._huiBuffButtons[buffButtonIndex]
-		if not btn then break end
-		btn:SetPoint("CENTER", bar, "CENTER", x, 0)
-		applyButton(btn, aura, "player")
-		buffsPlaced = buffsPlaced + 1
-		x = x + AURA_SIZE
-		if buffsPlaced < totalBuffs then x = x + AURA_GAP end
-		buffButtonIndex = buffButtonIndex + 1
-		end
-	end
-	for _, aura in ipairs(otherBuffs) do
-		local btn = bar._huiBuffButtons[buffButtonIndex]
-		if not btn then break end
-		btn:SetPoint("CENTER", bar, "CENTER", x, 0)
-		applyButton(btn, aura, "player")
-		buffsPlaced = buffsPlaced + 1
-		x = x + AURA_SIZE
-		if buffsPlaced < totalBuffs then x = x + AURA_GAP end
-		buffButtonIndex = buffButtonIndex + 1
-	end
-
-	if spacer > 0 then
-		x = x + spacer
-	end
-
-	local debuffButtonIndex = 1
-	for i, aura in ipairs(debuffs) do
-		local btn = bar._huiDebuffButtons[debuffButtonIndex]
-		if not btn then break end
-		btn:SetPoint("CENTER", bar, "CENTER", x, 0)
-		applyButton(btn, aura, "player")
-		x = x + AURA_SIZE
-		if i < #debuffs then x = x + AURA_GAP end
-		debuffButtonIndex = debuffButtonIndex + 1
-	end
-end
 
 updateTargetAuraBar = function()
 	ensureTargetAuraBar()

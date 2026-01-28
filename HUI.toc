@@ -13,6 +13,7 @@ src\micromenu.lua
 src\minimap.lua
 src\minimapbuttons.lua
 src\tooltip.lua
+src\flightdata.lua
 src\flighttimer.lua
 src\mirrortimers.lua
 src\errors.lua

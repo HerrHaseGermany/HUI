@@ -12,6 +12,77 @@ local buttons
 local BUTTON_W, BUTTON_H = 26, 34
 local ICON_W, ICON_H = 26, 35
 
+local function skinBlizzardMainMenuButton(b)
+	if not b or b._huiSkinned then return end
+	b._huiSkinned = true
+
+	-- Capture the original icon texture (before hiding regions).
+	local iconTex
+	if b.GetNormalTexture then
+		local nt = b:GetNormalTexture()
+		if nt and nt.GetTexture then iconTex = nt:GetTexture() end
+	end
+
+	-- Hide Blizzard artwork on the button; we draw our own to match the stack.
+	do
+		local regions = { b:GetRegions() }
+		for _, r in ipairs(regions) do
+			if r and r.GetObjectType and r:GetObjectType() == "Texture" then
+				r:SetAlpha(0)
+			end
+		end
+		if b.GetNormalTexture then
+			local nt = b:GetNormalTexture()
+			if nt then nt:SetAlpha(0) end
+		end
+		if b.GetPushedTexture then
+			local pt = b:GetPushedTexture()
+			if pt then pt:SetAlpha(0) end
+		end
+		if b.GetHighlightTexture then
+			local ht = b:GetHighlightTexture()
+			if ht then ht:SetAlpha(0) end
+		end
+		if b.GetDisabledTexture then
+			local dt = b:GetDisabledTexture()
+			if dt then dt:SetAlpha(0) end
+		end
+	end
+
+	local bg = b:CreateTexture(nil, "BACKGROUND")
+	bg:SetAllPoints()
+	bg:SetTexture("Interface\\Buttons\\WHITE8x8")
+	bg:SetVertexColor(0.05, 0.05, 0.05, 0.75)
+	b._huiBG = bg
+
+	local icon = b:CreateTexture(nil, "ARTWORK")
+	icon:ClearAllPoints()
+	icon:SetPoint("BOTTOM", b, "BOTTOM", 0, -2)
+	icon:SetSize(ICON_W, ICON_H)
+	if iconTex then
+		icon:SetTexture(iconTex)
+		icon:SetTexCoord(0.08, 0.92, 0.42, 1)
+	end
+	b._huiIcon = icon
+
+	local hl = b:CreateTexture(nil, "HIGHLIGHT")
+	hl:SetAllPoints()
+	hl:SetTexture("Interface\\Buttons\\WHITE8x8")
+	hl:SetVertexColor(1, 0.82, 0, 0.15)
+end
+
+local function reattachMainMenuButton()
+	if not holder or not buttons then return end
+	local b = _G.MainMenuMicroButton
+	if not b then return end
+	if b.SetParent then b:SetParent(holder) end
+	if b.SetFrameStrata then b:SetFrameStrata("MEDIUM") end
+	if b.SetSize then b:SetSize(BUTTON_W, BUTTON_H) end
+	if b.EnableMouse then b:EnableMouse(true) end
+	if b.Show then b:Show() end
+	skinBlizzardMainMenuButton(b)
+end
+
 local function setPlayerPortrait(tex)
 	if not tex then return end
 	if type(_G.SetPortraitTextureFromUnit) == "function" then
@@ -120,6 +191,14 @@ local entries = {
 			callToggle(_G.ToggleHelpFrame or _G.HelpMicroButton_OnClick)
 		end,
 	},
+	{
+		key = "Menu",
+		tooltip = "Game Menu",
+		blizz = "MainMenuMicroButton",
+		enabled = function()
+			return _G.MainMenuMicroButton ~= nil
+		end,
+	},
 }
 
 local function ensure()
@@ -134,27 +213,43 @@ local function ensureButtons()
 	buttons = {}
 
 	for i, e in ipairs(entries) do
-		local template = e.secureClick and "SecureActionButtonTemplate,BackdropTemplate" or "BackdropTemplate"
-		local b = CreateFrame("Button", "HUI_MicroMenuButton" .. i, holder, template)
-		b:SetSize(BUTTON_W, BUTTON_H)
-		b:RegisterForClicks("AnyUp")
-		b:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8" })
-		b:SetBackdropColor(0.05, 0.05, 0.05, 0.75)
+		local b
+		if e.blizz and _G[e.blizz] then
+			-- Use the real Blizzard button in our stack.
+			b = _G[e.blizz]
+			reattachMainMenuButton()
+			b:ClearAllPoints()
+			-- Keep our tooltip behavior (Blizzard button tooltips are inconsistent across versions).
+			b:SetScript("OnEnter", function(self)
+				if not GameTooltip then return end
+				GameTooltip:SetOwner(self, "ANCHOR_LEFT")
+				GameTooltip:SetText(e.tooltip or e.key or "Button")
+				GameTooltip:Show()
+			end)
+			b:SetScript("OnLeave", function()
+				if GameTooltip then GameTooltip:Hide() end
+			end)
+		else
+			b = CreateFrame("Button", "HUI_MicroMenuButton" .. i, holder, "BackdropTemplate")
+			b:SetSize(BUTTON_W, BUTTON_H)
+			b:RegisterForClicks("AnyUp")
+			b:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8x8" })
+			b:SetBackdropColor(0.05, 0.05, 0.05, 0.75)
 
-		local icon = b:CreateTexture(nil, "ARTWORK")
-		icon:ClearAllPoints()
-		icon:SetPoint("BOTTOM", b, "BOTTOM", 0, -2)
-		icon:SetSize(ICON_W, ICON_H)
-		if e.micro and _G[e.micro] and _G[e.micro].GetNormalTexture then
-			local tex = _G[e.micro]:GetNormalTexture()
-			if tex and tex.GetTexture then
-				icon:SetTexture(tex:GetTexture())
-				-- Micro button normal textures often contain multiple states stacked vertically.
-				-- Cropping to the lower half makes the glyph fill our custom button.
-				icon:SetTexCoord(0.08, 0.92, 0.42, 1)
+			local icon = b:CreateTexture(nil, "ARTWORK")
+			icon:ClearAllPoints()
+			icon:SetPoint("BOTTOM", b, "BOTTOM", 0, -2)
+			icon:SetSize(ICON_W, ICON_H)
+			if e.micro and _G[e.micro] and _G[e.micro].GetNormalTexture then
+				local tex = _G[e.micro]:GetNormalTexture()
+				if tex and tex.GetTexture then
+					icon:SetTexture(tex:GetTexture())
+					-- Micro button normal textures often contain multiple states stacked vertically.
+					-- Cropping to the lower half makes the glyph fill our custom button.
+					icon:SetTexCoord(0.08, 0.92, 0.42, 1)
+				end
 			end
-		end
-		b._huiIcon = icon
+			b._huiIcon = icon
 
 			if e.portraitOverlay and (type(_G.SetPortraitTextureFromUnit) == "function" or type(_G.SetPortraitTexture) == "function") then
 				local p = b:CreateTexture(nil, "OVERLAY")
@@ -165,36 +260,32 @@ local function ensureButtons()
 				b._huiPortrait = p
 			end
 
-		local hl = b:CreateTexture(nil, "HIGHLIGHT")
-		hl:SetAllPoints()
-		hl:SetTexture("Interface\\Buttons\\WHITE8x8")
-		hl:SetVertexColor(1, 0.82, 0, 0.15)
+			local hl = b:CreateTexture(nil, "HIGHLIGHT")
+			hl:SetAllPoints()
+			hl:SetTexture("Interface\\Buttons\\WHITE8x8")
+			hl:SetVertexColor(1, 0.82, 0, 0.15)
 
-		if not e.micro then
-			local t = U.Font(b, 12, true)
-			t:SetPoint("CENTER", b, "CENTER", 0, 0)
-			t:SetJustifyH("CENTER")
-			t:SetText((e.key and e.key:sub(1, 1)) or "?")
-			b._huiLabel = t
-		end
+			if not e.micro then
+				local t = U.Font(b, 12, true)
+				t:SetPoint("CENTER", b, "CENTER", 0, 0)
+				t:SetJustifyH("CENTER")
+				t:SetText((e.key and e.key:sub(1, 1)) or "?")
+				b._huiLabel = t
+			end
 
-		if e.secureClick then
-			b:SetAttribute("type", "click")
-			b._huiSecureClickName = e.secureClick
-		else
 			b:SetScript("OnClick", function()
 				if e.run then e.run() end
 			end)
+			b:SetScript("OnEnter", function(self)
+				if not GameTooltip then return end
+				GameTooltip:SetOwner(self, "ANCHOR_LEFT")
+				GameTooltip:SetText(e.tooltip or e.key or "Button")
+				GameTooltip:Show()
+			end)
+			b:SetScript("OnLeave", function()
+				if GameTooltip then GameTooltip:Hide() end
+			end)
 		end
-		b:SetScript("OnEnter", function(self)
-			if not GameTooltip then return end
-			GameTooltip:SetOwner(self, "ANCHOR_LEFT")
-			GameTooltip:SetText(e.tooltip or e.key or "Button")
-			GameTooltip:Show()
-		end)
-		b:SetScript("OnLeave", function()
-			if GameTooltip then GameTooltip:Hide() end
-		end)
 
 		buttons[i] = b
 	end
@@ -220,7 +311,7 @@ local function disableBlizzardMicroMenu()
 		"SupportMicroButton",
 		"StoreMicroButton",
 		"WorldMapMicroButton",
-		"MainMenuMicroButton",
+		-- Keep MainMenuMicroButton visible/active (we use the original button).
 	}
 	for _, n in ipairs(names) do
 		local b = _G[n]
@@ -250,6 +341,7 @@ local function apply(cfg)
 
 	-- Disable Blizzard micro menu (we provide our own).
 	disableBlizzardMicroMenu()
+	reattachMainMenuButton()
 
 	local scale = cfg.scale or 0.95
 	holder:SetScale(scale)
@@ -268,18 +360,13 @@ local function apply(cfg)
 				if e and e.portraitOverlay and b._huiPortrait then
 					setPlayerPortrait(b._huiPortrait)
 				end
-			if e and e.secureClick and b._huiSecureClickName then
-				local target = _G[b._huiSecureClickName]
-				if target then b:SetAttribute("clickbutton", target) end
-			end
 		local enabled = e
-			and (e.run ~= nil or e.secureClick ~= nil)
-			and (not e.enabled or e.enabled())
-			and (not e.secureClick or _G[e.secureClick] ~= nil)
-		b:SetAlpha(enabled and 1 or 0.35)
-		b:EnableMouse(enabled)
+				and (e.run ~= nil or e.blizz ~= nil)
+				and (not e.enabled or e.enabled())
+			b:SetAlpha(enabled and 1 or 0.35)
+			b:EnableMouse(enabled)
+		end
 	end
-end
 
 function M:Apply(db)
 	ensure()
@@ -292,6 +379,7 @@ function M:Apply(db)
 		hooksecurefunc("UIParent_ManageFramePositions", function()
 			if InCombatLockdown and InCombatLockdown() then return end
 			disableBlizzardMicroMenu()
+			reattachMainMenuButton()
 		end)
 		if type(_G.UpdateMicroButtons) == "function" then
 			hooksecurefunc("UpdateMicroButtons", function()
