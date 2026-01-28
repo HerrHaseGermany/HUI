@@ -19,7 +19,10 @@ local COLORS = {
 	FEIGNDEATH = { 0.10, 0.55, 0.20, 1 },  -- dark green
 }
 
-local active = {} -- [timer] = { endTime, duration, scale, paused, label }
+-- NOTE: Mirror timers can count down (scale < 0) or fill up (scale > 0).
+-- Blizzard's implementation tracks a "value" in milliseconds and updates it
+-- as: value = value + elapsed * 1000 * scale.
+local active = {} -- [timer] = { valueMs, maxMs, scale, paused, label }
 local order = {}  -- timers in display order
 
 local function now()
@@ -80,18 +83,25 @@ local function ensure()
 		M._bars[i] = b
 	end
 
-	f:SetScript("OnUpdate", function()
+	f:SetScript("OnUpdate", function(_, elapsed)
 		if not next(active) then
 			f:Hide()
 			return
 		end
 
-		local t = now()
+		local dt = elapsed or 0
 		local changed = false
 		for timer, st in pairs(active) do
-			if not st.paused and st.endTime and t >= st.endTime then
-				active[timer] = nil
-				changed = true
+			if not st.paused then
+				local scale = st.scale or -1
+				local maxMs = st.maxMs or 0
+				local v = (st.valueMs or 0) + (dt * 1000 * scale)
+				st.valueMs = v
+
+				if (scale < 0 and v <= 0) or (scale > 0 and v >= maxMs) then
+					active[timer] = nil
+					changed = true
+				end
 			end
 		end
 		if changed then
@@ -100,9 +110,22 @@ local function ensure()
 		end
 
 		-- Sort: stable-ish by remaining time (shorter first).
+		local t = now()
 		table.sort(order, function(a, b)
-			local ra = active[a] and (active[a].endTime - t) or 0
-			local rb = active[b] and (active[b].endTime - t) or 0
+			local sa = active[a]
+			local sb = active[b]
+
+			local function remainingSeconds(st)
+				if not st then return 0 end
+				local scale = st.scale or -1
+				local maxMs = st.maxMs or 0
+				local v = st.valueMs or 0
+				local remainMs = (scale < 0) and v or (maxMs - v)
+				return (remainMs or 0) / 1000
+			end
+
+			local ra = remainingSeconds(sa)
+			local rb = remainingSeconds(sb)
 			return ra < rb
 		end)
 
@@ -111,10 +134,13 @@ local function ensure()
 			local timer = order[i]
 			local st = timer and active[timer]
 			if bar and st then
-				local remain = st.paused and (st.remaining or 0) or math.max(0, (st.endTime or t) - t)
-				local dur = st.duration or 1
-				bar:SetMinMaxValues(0, dur)
-				bar:SetValue(remain)
+				local maxMs = st.maxMs or 1
+				local vMs = st.valueMs or 0
+				local maxSec = maxMs / 1000
+				local vSec = vMs / 1000
+
+				bar:SetMinMaxValues(0, maxSec > 0 and maxSec or 1)
+				bar:SetValue(math.max(0, math.min(maxSec, vSec)))
 				local col = COLORS[timer]
 				if col then
 					bar:SetStatusBarColor(col[1], col[2], col[3], col[4] or 1)
@@ -122,7 +148,9 @@ local function ensure()
 					bar:SetStatusBarColor(1, 1, 1, 1)
 				end
 				bar._label:SetText(st.label or timer)
-				bar._time:SetText(fmt(remain))
+				local scale = st.scale or -1
+				local remainSec = (scale < 0) and (vSec) or math.max(0, (maxSec - vSec))
+				bar._time:SetText(fmt(remainSec))
 				bar:Show()
 			elseif bar then
 				bar:Hide()
@@ -155,18 +183,13 @@ end
 local function onStart(timer, value, maxvalue, scale, paused, label)
 	ensure()
 	if not timer then return end
-	-- Blizzard passes milliseconds; `scale` is typically -1 for countdown.
-	local s = math.abs(scale or 1)
-	local dur = (maxvalue or 0) / (s * 1000)
-	local remain = (value or 0) / (s * 1000)
 	local isPaused = (paused == 1) or (paused == true)
 
 	active[timer] = {
-		duration = dur > 0 and dur or 1,
-		endTime = (not isPaused) and (now() + remain) or nil,
+		valueMs = value or 0,
+		maxMs = maxvalue or 0,
 		scale = scale,
 		paused = isPaused,
-		remaining = isPaused and remain or nil,
 		label = label,
 	}
 
@@ -192,18 +215,10 @@ local function onPause(timer, paused, value)
 	if isPaused then
 		st.paused = true
 		-- Some clients send `value` (ms) on pause; prefer it if available.
-		if value ~= nil then
-			local s = math.abs(st.scale or 1)
-			st.remaining = (value or 0) / (s * 1000)
-		else
-			st.remaining = math.max(0, (st.endTime or now()) - now())
-		end
-		st.endTime = nil
+		if value ~= nil then st.valueMs = value or 0 end
 	else
 		st.paused = false
-		local rem = st.remaining or 0
-		st.endTime = now() + rem
-		st.remaining = nil
+		if value ~= nil then st.valueMs = value or 0 end
 	end
 
 	if M._f and M._f.Show then M._f:Show() end

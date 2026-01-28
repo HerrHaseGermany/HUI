@@ -3,6 +3,7 @@
 ## Notes: Hase UI - lightweight Classic Hardcore UI
 ## Author: Hase
 ## Version: 0.1.0
+## OptionalDeps: RestedXP, TomTom, Questie, Leatrix_Maps
 ## SavedVariables: HUIDB
 
 src\util.lua
