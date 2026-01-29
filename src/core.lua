@@ -25,7 +25,14 @@ local function defaultDB()
 			-- Per-bar positioning
 			bars = {},
 		},
+		actionbarSetup = {
+			profiles = {},
+		},
 		micromenu = { x = 0, y = 4, scale = 0.95 },
+		nameplates = {
+			aurasMax = 8,
+			aurasUnlimited = true,
+		},
 		colors = {
 			health = { 0.10, 0.85, 0.10 },
 			power = { 0.15, 0.55, 0.95 },

@@ -34,6 +34,7 @@ It’s intentionally minimal: no config UI and no big dependencies. Most layout 
 
 - Custom nameplates with:
   - Health bar + thin resource bar underneath
+  - Threat meter bar on top (shows your threat vs that unit; fill = `scaledPercent` 0–100, color = Blizzard threat status)
   - Level badge rules aligned with the target frame
   - HP text compaction (k/M formatting) to prevent overflow
   - PvP badge + raid marker positioning

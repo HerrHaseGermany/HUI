@@ -167,13 +167,19 @@ local function ensure()
 	f._bar = bar
 	bar:Hide()
 
-	-- Text lives on the frame so it can show even when the blue bar is hidden.
-	local timeText = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
+	-- Keep text above the StatusBar; otherwise the bar can overlap the text on some clients.
+	local textFrame = CreateFrame("Frame", nil, f)
+	textFrame:SetAllPoints(f)
+	textFrame:SetFrameLevel((bar:GetFrameLevel() or (f:GetFrameLevel() + 1)) + 1)
+	f._textFrame = textFrame
+
+	-- Text lives on the overlay frame so it can show even when the blue bar is hidden.
+	local timeText = textFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
 	timeText:SetPoint("CENTER", f, "CENTER", 0, 0)
 	timeText:SetText("00:00")
 	f._timeText = timeText
 
-	local destText = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+	local destText = textFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
 	destText:SetPoint("RIGHT", f, "RIGHT", -10, 0)
 	destText:SetJustifyH("RIGHT")
 	destText:SetText("")

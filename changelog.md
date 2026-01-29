@@ -1,10 +1,15 @@
 ## Changelog
 
-# TODO MAP
-# TODO Actionbar Slot Organisation
+# TODO MAP. Relies on Leatrix Maps for now.
+# TODO Quest Hub. Relies on Questie for now.
+# TODO Guide. Relies on RestedXP for now.
+# TODO Navigation. Relies on TomTom for now.
+# TODO BAG organisation. Relies on Baganator for now.
 # TODO Group/Raid Frames
-# TODO fix Namepplate clickable area top full bar
-# TODO Threadmeter
+# TODO fix Namepplate clickable area on full bar.
+# TODO add in fight indicator
+# TODO add Thread bar to target frame
+# TODO add in fight indicator to player frame. red bar above healthbar same look as thread meter
 
 ## 0.1.0
 
@@ -13,6 +18,7 @@ Initial release of HUI (Classic Era / Hardcore-focused, hardcoded layout).
 - Core: module loader + `HUIDB` SavedVariables with per-module enable flags.
 - System: auto-loot enabled, all action bars enabled + “always show action bars”, max camera distance set (`cameraDistanceMaxZoomFactor = 4.0`).
 - Action bars: custom layout for MainMenuBar + MultiBars, hides default bar art + tracking/performance bars, pins pet/stance/possess/totem bars above the main stack.
+- Action bar setup: saves action bars globally per character GUID (persisting after deletion), with an Options subcategory (manual save/load) and automatic save on logout.
 - Micromenu: custom vertical micro menu stack including the Blizzard game menu button.
 - Unitframes: custom player/target/targettarget frames (health/power/cast, model frames, PvP badge + timer, raid target icon, combo points, elite/rare/worldboss ring behavior).
 - Auras: uses Blizzard aura buttons for correct updates/cancel behavior, then re-anchors/restyles them for player + target.
@@ -26,3 +32,4 @@ Initial release of HUI (Classic Era / Hardcore-focused, hardcoded layout).
 - Tooltip: fixed tooltip anchor/position.
 - Errors: hides red UI error spam (UIErrorsFrame).
 - Vendor: auto-sell grey items when opening a merchant (hold Shift to skip).
+- Nameplates: added a threat meter bar above nameplates (fill = threat `scaledPercent` 0–100; color = Blizzard threat status).

@@ -209,14 +209,20 @@ local function hideBlizzardTargetFrames()
 	forceHide(_G.TargetFrame)
 	forceHide(_G.TargetFrameToT)
 	forceHide(_G.ComboPointPlayerFrame)
+	forceHide(_G.FocusFrame)
 end
 
 forceHide = function(frame)
 	if not frame or not frame.Hide then return end
+	if frame.UnregisterAllEvents then frame:UnregisterAllEvents() end
 	frame:Hide()
 	-- Keep Blizzard code intact but prevent it from showing again.
 	if frame.SetScript then
 		frame:SetScript("OnShow", function(self) self:Hide() end)
+	end
+	if hooksecurefunc and not frame._HUIForceHideHooked then
+		frame._HUIForceHideHooked = true
+		hooksecurefunc(frame, "Show", function(self) self:Hide() end)
 	end
 end
 
@@ -240,6 +246,19 @@ end
 local function formatPercent(cur, max)
 	if not cur or not max or max <= 0 then return "" end
 	return string.format("%.0f%%", (cur / max) * 100)
+end
+
+local function formatAmount4(n)
+	n = tonumber(n) or 0
+	if n >= 1000000 then
+		local m = math.floor((n + 500000) / 1000000)
+		return tostring(m) .. "M"
+	end
+	if n >= 10000 then
+		local k = math.floor((n + 500) / 1000)
+		return tostring(k) .. "k"
+	end
+	return tostring(n)
 end
 
 local function powerColor(unit)
@@ -272,6 +291,10 @@ local function targetLevelColor(unit, lvl)
 		local reaction = UnitReaction(unit, "player")
 		-- Only friendly (5+) is forced white; neutral should use difficulty like enemies.
 		if reaction and reaction >= 5 then
+			return 1, 1, 1
+		end
+		-- Not attackable (including other-faction in sanctuary/flag rules): treat as friendly for level color.
+		if UnitCanAttack and not UnitCanAttack("player", unit) then
 			return 1, 1, 1
 		end
 	end
@@ -1388,8 +1411,9 @@ local function updatePlayerBars()
 	end
 	
 	updatePvPBadge(health, "player")
-	health._huiCenter:SetText(shortNumber(curH))
-	health._huiRight:SetText(formatPercent(curH, maxH))
+	-- Match nameplates: percent centered, amount on right (compact to ~4 chars).
+	health._huiCenter:SetText(formatPercent(curH, maxH))
+	health._huiRight:SetText(formatAmount4(curH))
 
 	local curP = UnitPower("player")
 	local maxP = UnitPowerMax("player")
@@ -1398,8 +1422,8 @@ local function updatePlayerBars()
 	local pr, pg, pb = powerColor("player")
 	power:SetStatusBarColor(pr, pg, pb)
 	if maxP and maxP > 0 then
-		power._huiCenter:SetText(shortNumber(curP))
-		power._huiRight:SetText(formatPercent(curP, maxP))
+		power._huiCenter:SetText(formatPercent(curP, maxP))
+		power._huiRight:SetText(formatAmount4(curP))
 	else
 		power._huiCenter:SetText("")
 		power._huiRight:SetText("")
@@ -1629,8 +1653,8 @@ local function updateTargetBars()
 	else
 		health._huiLeft:SetText(tostring(lvl))
 	end
-	health._huiCenter:SetText(shortNumber(curH))
-	health._huiRight:SetText(formatPercent(curH, maxH))
+	health._huiCenter:SetText(formatPercent(curH, maxH))
+	health._huiRight:SetText(formatAmount4(curH))
 
 	-- Level ring behavior for target:
 	-- normal: none
@@ -1668,8 +1692,8 @@ local function updateTargetBars()
 			local pr, pg, pb = powerColor("target")
 			power:SetStatusBarColor(pr, pg, pb)
 			power._huiLeft:SetText("")
-			power._huiCenter:SetText(shortNumber(curP))
-			power._huiRight:SetText(formatPercent(curP, maxP))
+			power._huiCenter:SetText(formatPercent(curP, maxP))
+			power._huiRight:SetText(formatAmount4(curP))
 		end
 
 		-- Combo points (player -> target)

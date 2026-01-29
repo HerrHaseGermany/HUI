@@ -6,6 +6,7 @@ table.insert(HUI.modules, M)
 local PLATE_W, PLATE_H = 250, 30
 local COLOR_BORDER = { 0, 0, 0, 1 }
 local RESOURCE_H = 5
+local THREAT_H = RESOURCE_H
 local NAME_SIZE, SUB_SIZE = 18, 16
 local MIN_NAME_SIZE, MIN_SUB_SIZE = 10, 10
 local TEXT_MAX_W = PLATE_W - 120 -- leave room for level/hp
@@ -23,6 +24,25 @@ local RAIDMARK_SIZE = 36
 local HP_FONT_SIZE = 18
 local HP_FONT_MIN = 12
 local HP_DIGITS_BASE = 3
+local AURA_SIZE = 14
+local AURA_GAP = 2
+local AURA_MAX_DEFAULT = 8
+local AURA_MAX_LIMIT = 12
+local AURA_MAX_LIMIT_UNLIMITED = 80 -- 40 harmful + 40 helpful (UnitAura scan cap)
+
+local function getAuraMax()
+	local db = (HUI and HUI.GetDB and HUI:GetDB()) or nil
+	local n = db and db.nameplates and tonumber(db.nameplates.aurasMax) or nil
+	n = math.floor(tonumber(n) or AURA_MAX_DEFAULT)
+	if n < 0 then n = 0 end
+	if n > AURA_MAX_LIMIT then n = AURA_MAX_LIMIT end
+	return n
+end
+
+local function getAuraUnlimited()
+	local db = (HUI and HUI.GetDB and HUI:GetDB()) or nil
+	return db and db.nameplates and db.nameplates.aurasUnlimited == true
+end
 
 local function unitNameColor(unit)
 	-- Match Blizzard-style unit name coloring (class for players, reaction for NPCs).
@@ -75,6 +95,212 @@ local function formatHPText(hp)
 		return ks .. "k", (#ks + 1)
 	end
 	return tostring(hp), HP_DIGITS_BASE
+end
+
+local function ensureAuraBar(uf)
+	if uf._HUIAuraBar then return uf._HUIAuraBar end
+	if not uf._HUIResource then return nil end
+
+	local bar = CreateFrame("Frame", nil, uf)
+	bar:SetHeight(AURA_SIZE)
+	-- Directly under the resource bar (no gap).
+	bar:SetPoint("TOP", uf._HUIResource, "BOTTOM", 0, 0)
+	bar:SetWidth((AURA_SIZE * AURA_MAX_DEFAULT) + (AURA_GAP * (AURA_MAX_DEFAULT - 1)))
+	bar:SetFrameLevel((uf._HUIBar and uf._HUIBar.GetFrameLevel and uf._HUIBar:GetFrameLevel() or 0) + 20)
+	bar._huiOwner = uf
+	uf._HUIAuraBar = bar
+	uf._HUIAuraIcons = {}
+
+	local function createIcon(i)
+		local b = CreateFrame("Frame", nil, bar, "BackdropTemplate")
+		b:SetSize(AURA_SIZE, AURA_SIZE)
+		b:SetBackdrop({ edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
+		b:SetBackdropBorderColor(0, 0, 0, 1)
+
+		local tex = b:CreateTexture(nil, "ARTWORK")
+		tex:SetAllPoints(b)
+		b._tex = tex
+
+		local cd = CreateFrame("Cooldown", nil, b, "CooldownFrameTemplate")
+		cd:SetAllPoints(b)
+		cd:SetDrawEdge(false)
+		-- No timer text and no swipe on nameplate auras.
+		if cd.SetDrawSwipe then cd:SetDrawSwipe(false) end
+		if cd.SetHideCountdownNumbers then cd:SetHideCountdownNumbers(true) end
+		b._cd = cd
+
+		local count = b:CreateFontString(nil, "OVERLAY")
+		count:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", 1, -1)
+		count:SetFont(STANDARD_TEXT_FONT, 10, "THICKOUTLINE")
+		count:SetJustifyH("RIGHT")
+		b._count = count
+
+		b:Hide()
+		uf._HUIAuraIcons[i] = b
+		return b
+	end
+
+	for i = 1, AURA_MAX_LIMIT do
+		createIcon(i)
+	end
+
+	return bar
+end
+
+local function ensureAuraIcons(uf, want)
+	if not uf then return end
+	local bar = uf._HUIAuraBar
+	local icons = uf._HUIAuraIcons
+	if not (bar and icons) then return end
+	for i = (#icons + 1), want do
+		-- Create new icons on demand for "unlimited" mode.
+		local b = CreateFrame("Frame", nil, bar, "BackdropTemplate")
+		b:SetSize(AURA_SIZE, AURA_SIZE)
+		b:SetBackdrop({ edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
+		b:SetBackdropBorderColor(0, 0, 0, 1)
+
+		local tex = b:CreateTexture(nil, "ARTWORK")
+		tex:SetAllPoints(b)
+		b._tex = tex
+
+		local cd = CreateFrame("Cooldown", nil, b, "CooldownFrameTemplate")
+		cd:SetAllPoints(b)
+		cd:SetDrawEdge(false)
+		if cd.SetDrawSwipe then cd:SetDrawSwipe(false) end
+		if cd.SetHideCountdownNumbers then cd:SetHideCountdownNumbers(true) end
+		b._cd = cd
+
+		local count = b:CreateFontString(nil, "OVERLAY")
+		count:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", 1, -1)
+		count:SetFont(STANDARD_TEXT_FONT, 10, "THICKOUTLINE")
+		count:SetJustifyH("RIGHT")
+		b._count = count
+
+		b:Hide()
+		icons[i] = b
+	end
+end
+
+local function updateAuras(unit, uf)
+	if not (UnitAura and uf) then return end
+	local bar = ensureAuraBar(uf)
+	if not bar then return end
+	local icons = uf._HUIAuraIcons
+	if not icons then return end
+
+	-- Same idea as target frame: debuffs on the left, buffs on the right.
+	local debuffs = {}
+	local buffs = {}
+
+	for i = 1, 40 do
+		local name, icon, count, _, duration, expirationTime = UnitAura(unit, i, "HARMFUL|PLAYER")
+		if not name then break end
+		debuffs[#debuffs + 1] = { icon = icon, count = count, duration = duration, expirationTime = expirationTime }
+	end
+	for i = 1, 40 do
+		local name, icon, count, _, duration, expirationTime = UnitAura(unit, i, "HELPFUL|PLAYER")
+		if not name then break end
+		buffs[#buffs + 1] = { icon = icon, count = count, duration = duration, expirationTime = expirationTime }
+	end
+
+	local maxIcons
+	local unlimited = getAuraUnlimited()
+	if unlimited then
+		maxIcons = math.min(AURA_MAX_LIMIT_UNLIMITED, #debuffs + #buffs)
+	else
+		maxIcons = getAuraMax()
+	end
+
+	local leftMax = unlimited and math.min(#debuffs, maxIcons) or math.floor(maxIcons / 2)
+	local rightMax = unlimited and math.min(#buffs, maxIcons) or (maxIcons - leftMax)
+	ensureAuraIcons(uf, leftMax + rightMax)
+
+	local function setIcon(b, aura)
+		if not (b and aura and aura.icon) then return false end
+		b._tex:SetTexture(aura.icon)
+		if aura.count and aura.count > 1 then
+			b._count:SetText(tostring(aura.count))
+		else
+			b._count:SetText("")
+		end
+		if b._cd then b._cd:Hide() end
+		return true
+	end
+
+	local step = AURA_SIZE + AURA_GAP
+	local used = 0
+
+	local leftCount = math.min(#debuffs, leftMax)
+	local rightCount = math.min(#buffs, rightMax)
+	local spacer = (leftCount > 0 and rightCount > 0) and AURA_GAP or 0
+	local leftWidth = (leftCount > 0) and (leftCount * AURA_SIZE + (leftCount - 1) * AURA_GAP) or 0
+	local rightWidth = (rightCount > 0) and (rightCount * AURA_SIZE + (rightCount - 1) * AURA_GAP) or 0
+	local totalWidth = leftWidth + spacer + rightWidth
+
+	bar:SetWidth(math.max(1, totalWidth))
+
+	local x = -totalWidth / 2 + (AURA_SIZE / 2)
+
+	-- Debuffs: left side (from center outward but kept packed/centered overall).
+	for j = 1, leftMax do
+		local b = icons[j]
+		b:ClearAllPoints()
+		if j <= leftCount then
+			b:SetPoint("CENTER", bar, "CENTER", x, 0)
+			x = x + AURA_SIZE
+			if j < leftCount then x = x + AURA_GAP end
+		end
+		local aura = (j <= leftCount) and debuffs[j] or nil
+		if aura and setIcon(b, aura) then
+			b:Show()
+			used = used + 1
+		else
+			b:Hide()
+		end
+	end
+
+	if spacer > 0 then x = x + spacer end
+
+	-- Buffs: right side.
+	for j = 1, rightMax do
+		local idx = leftMax + j
+		local b = icons[idx]
+		b:ClearAllPoints()
+		if j <= rightCount then
+			b:SetPoint("CENTER", bar, "CENTER", x, 0)
+			x = x + AURA_SIZE
+			if j < rightCount then x = x + AURA_GAP end
+		end
+		local aura = (j <= rightCount) and buffs[j] or nil
+		if aura and setIcon(b, aura) then
+			b:Show()
+			used = used + 1
+		else
+			b:Hide()
+		end
+	end
+
+	local hardHideFrom = (leftMax + rightMax) + 1
+	for i = hardHideFrom, math.max(AURA_MAX_LIMIT, #icons) do
+		local b = icons[i]
+		if b then
+			b:Hide()
+			b:ClearAllPoints()
+		end
+	end
+
+	if used > 0 then bar:Show() else bar:Hide() end
+end
+
+function M:RefreshAuraConfig()
+	if not (C_NamePlate and C_NamePlate.GetNamePlates) then return end
+	for _, plate in ipairs(C_NamePlate.GetNamePlates() or {}) do
+		local u = plate and plate.namePlateUnitToken
+		local uf = u and ensurePlate(u) or nil
+		if u and uf then
+			updateAuras(u, uf)
+		end
+	end
 end
 
 local function getNPCTitle(unit)
@@ -256,11 +482,16 @@ local function updateQuestMark() end
 local function targetLevelColor(unit, lvl)
 	-- Match our target frame rules:
 	-- - Friendly units: white
-	-- - Neutral/hostile units: level difficulty color (GetQuestDifficultyColor)
+	-- - Any non-attackable units (including other faction in sanctuary/flag rules): white
+	-- - Neutral/hostile attackable units: level difficulty color (GetQuestDifficultyColor)
 	if UnitReaction then
 		local reaction = UnitReaction(unit, "player")
 		-- 5+ = friendly
 		if reaction and reaction >= 5 then
+			return 1, 1, 1
+		end
+		-- Not attackable: treat as friendly for level color.
+		if UnitCanAttack and not UnitCanAttack("player", unit) then
 			return 1, 1, 1
 		end
 	end
@@ -428,16 +659,35 @@ local function ensurePlate(unit)
 	-- We handle clicks on a dedicated overlay button.
 	if bar.EnableMouse then bar:EnableMouse(false) end
 	bar:SetStatusBarTexture("Interface\\TARGETINGFRAME\\UI-StatusBar")
-	bar:SetMinMaxValues(0, 1)
-	bar:SetValue(0)
-	uf._HUIBar = bar
-	expandPlateHitRect(plate)
+		bar:SetMinMaxValues(0, 1)
+		bar:SetValue(0)
+		uf._HUIBar = bar
+		expandPlateHitRect(plate)
 
-	-- 3px resource bar below health.
-	local res = CreateFrame("StatusBar", nil, uf)
-	res:SetHeight(RESOURCE_H)
-	res:SetPoint("TOPLEFT", bar, "BOTTOMLEFT", 0, 0)
-	res:SetPoint("TOPRIGHT", bar, "BOTTOMRIGHT", 0, 0)
+		-- Threat meter above health.
+		local threat = CreateFrame("StatusBar", nil, uf)
+		threat:SetHeight(THREAT_H)
+		-- Overlap by 1px so borders don't double up between stacked bars.
+		threat:SetPoint("BOTTOMLEFT", bar, "TOPLEFT", 0, -1)
+		threat:SetPoint("BOTTOMRIGHT", bar, "TOPRIGHT", 0, -1)
+		threat:SetStatusBarTexture("Interface\\TARGETINGFRAME\\UI-StatusBar")
+		threat:SetMinMaxValues(0, 100)
+		threat:SetValue(0)
+		threat:Hide()
+		uf._HUIThreat = threat
+
+		local threatBorder = CreateFrame("Frame", nil, threat, "BackdropTemplate")
+		threatBorder:SetAllPoints(threat)
+		threatBorder:SetBackdrop({ edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
+		threatBorder:SetBackdropBorderColor(unpack(COLOR_BORDER))
+		threat._huiBorder = threatBorder
+
+		-- 3px resource bar below health.
+		local res = CreateFrame("StatusBar", nil, uf)
+		res:SetHeight(RESOURCE_H)
+		-- Overlap by 1px so borders don't double up between stacked bars.
+		res:SetPoint("TOPLEFT", bar, "BOTTOMLEFT", 0, 1)
+		res:SetPoint("TOPRIGHT", bar, "BOTTOMRIGHT", 0, 1)
 	res:SetStatusBarTexture("Interface\\TARGETINGFRAME\\UI-StatusBar")
 	res:SetMinMaxValues(0, 1)
 	res:SetValue(0)
@@ -552,6 +802,48 @@ local function ensurePlate(unit)
 	return uf
 end
 
+local function updateThreat(unit, uf)
+	local bar = uf and uf._HUIThreat
+	if not bar then return end
+	if not (unit and UnitExists and UnitExists(unit)) then
+		bar:Hide()
+		return
+	end
+	if not UnitDetailedThreatSituation then
+		bar:Hide()
+		return
+	end
+	if UnitCanAttack and not UnitCanAttack("player", unit) then
+		bar:Hide()
+		return
+	end
+
+	local _, status, scaledPercent = UnitDetailedThreatSituation("player", unit)
+	if not scaledPercent or scaledPercent <= 0 then
+		bar:Hide()
+		return
+	end
+
+	if scaledPercent > 100 then scaledPercent = 100 end
+	bar:SetMinMaxValues(0, 100)
+	bar:SetValue(scaledPercent)
+
+	local r, g, b = 1, 1, 1
+	if status ~= nil and GetThreatStatusColor then
+		r, g, b = GetThreatStatusColor(status)
+	elseif status == 3 then
+		r, g, b = 1, 0, 0
+	elseif status == 2 then
+		r, g, b = 1, 0.6, 0
+	elseif status == 1 then
+		r, g, b = 1, 1, 0
+	else
+		r, g, b = 0, 1, 0
+	end
+	bar:SetStatusBarColor(r, g, b)
+	bar:Show()
+end
+
 local function updatePlate(unit, what)
 	local uf = ensurePlate(unit)
 	if not uf then return end
@@ -574,6 +866,10 @@ local function updatePlate(unit, what)
 			uf._HUIBar:SetStatusBarColor(r, g, b)
 			uf._HUIBar:SetValue(pct)
 		end
+	end
+
+	if not what or what == "threat" then
+		updateThreat(unit, uf)
 	end
 
 	if not what or what == "name" then
@@ -683,6 +979,10 @@ local function updatePlate(unit, what)
 			end
 		end
 	end
+
+	if not what or what == "auras" then
+		updateAuras(unit, uf)
+	end
 end
 
 local function updateSelectionAlpha()
@@ -775,10 +1075,13 @@ function M:Apply()
 		ev:RegisterEvent("UNIT_NAME_UPDATE")
 		ev:RegisterEvent("UNIT_LEVEL")
 		ev:RegisterEvent("UNIT_HEALTH")
+		ev:RegisterEvent("UNIT_THREAT_SITUATION_UPDATE")
+		ev:RegisterEvent("UNIT_THREAT_LIST_UPDATE")
 		ev:RegisterEvent("UNIT_POWER_UPDATE")
 		ev:RegisterEvent("UNIT_POWER_FREQUENT")
 		ev:RegisterEvent("UNIT_MAXPOWER")
 		ev:RegisterEvent("UNIT_DISPLAYPOWER")
+		ev:RegisterEvent("UNIT_AURA")
 		ev:SetScript("OnEvent", function(_, event, arg1)
 			if event == "PLAYER_ENTERING_WORLD" then
 				apply()
@@ -807,6 +1110,7 @@ function M:Apply()
 			if event == "NAME_PLATE_UNIT_ADDED" then
 				updatePlate(arg1)
 				updatePlate(arg1, "power")
+				updatePlate(arg1, "auras")
 				updateSelectionAlpha()
 				return
 			end
@@ -822,8 +1126,16 @@ function M:Apply()
 				updatePlate(arg1, "health")
 				return
 			end
+			if event == "UNIT_THREAT_SITUATION_UPDATE" or event == "UNIT_THREAT_LIST_UPDATE" then
+				updatePlate(arg1, "threat")
+				return
+			end
 			if event == "UNIT_POWER_UPDATE" or event == "UNIT_POWER_FREQUENT" or event == "UNIT_MAXPOWER" or event == "UNIT_DISPLAYPOWER" then
 				updatePlate(arg1, "power")
+				return
+			end
+			if event == "UNIT_AURA" then
+				updatePlate(arg1, "auras")
 				return
 			end
 			if event == "UNIT_NAME_UPDATE" or event == "UNIT_LEVEL" then

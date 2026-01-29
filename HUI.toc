@@ -1,6 +1,6 @@
 ## Interface: 11508
 ## Title: HUI
-## Notes: Hase UI - lightweight Classic Hardcore UI
+## Notes: Hase UI - lightweight UI
 ## Author: Hase
 ## Version: 0.1.0
 ## OptionalDeps: RestedXP, TomTom, Questie, Leatrix_Maps
@@ -12,6 +12,7 @@ src\camera.lua
 src\systemsettings.lua
 src\autosell.lua
 src\actionbars.lua
+src\actionbarsetup.lua
 src\xpbar.lua
 src\restingindicator.lua
 src\micromenu.lua
