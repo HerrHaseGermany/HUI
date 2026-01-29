@@ -1,5 +1,9 @@
 ## Changelog
 
+# TODO Get Ready for TBC
+    - aditional Action Bars
+    - Nameplates do not show correctly, not clickable
+    - 
 # TODO MAP. Relies on Leatrix Maps for now.
 # TODO Quest Hub. Relies on Questie for now.
 # TODO Guide. Relies on RestedXP for now.
@@ -10,6 +14,7 @@
 # TODO add in fight indicator
 # TODO add Thread bar to target frame
 # TODO add in fight indicator to player frame. red bar above healthbar same look as thread meter
+# TODO remove Nameplates Options Menu
 
 ## 0.1.0
 
